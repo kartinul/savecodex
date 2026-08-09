@@ -198,12 +198,10 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
     }
 
     let (font_regular_bytes, font_bold_bytes) = match opts.style {
-        WindowStyle::Windows => {
-            (
-                include_bytes!("../assets/font-regular.ttf").as_slice(),
-                include_bytes!("../assets/font-bold.ttf").as_slice(),
-            )
-        },
+        WindowStyle::Windows => (
+            include_bytes!("../assets/font-regular.ttf").as_slice(),
+            include_bytes!("../assets/font-bold.ttf").as_slice(),
+        ),
         WindowStyle::Linux => {
             (
                 include_bytes!("../assets/UbuntuMono-Regular.ttf").as_slice(),

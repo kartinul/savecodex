@@ -110,9 +110,10 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
             
         let output = child.wait_with_output()?;
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let mut err_out = String::from_utf8_lossy(&output.stdout).to_string();
+            err_out.push_str(&String::from_utf8_lossy(&output.stderr));
             let executed_cmd = args.join(" ");
-            return Ok((executed_cmd, stderr.to_string()));
+            return Ok((executed_cmd, err_out));
         }
     }
     
@@ -131,6 +132,7 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
     // Read thread setup (clone before spawn to prevent os error 5 on macOS if child exits fast)
     let mut reader = pair.master.try_clone_reader()?;
     let (tx, rx) = mpsc::channel();
+    let (idle_tx, idle_rx) = mpsc::channel();
     
     let mut cmd = CommandBuilder::new(&run_args[0]);
     cmd.args(&run_args[1..]);
@@ -147,24 +149,45 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         while let Ok(n) = reader.read(&mut buf) {
             if n == 0 { break; }
             output.push_str(&String::from_utf8_lossy(&buf[..n]));
+            let _ = idle_tx.send(()); // Signal output activity
         }
         let _ = tx.send(output);
     });
     
-    // Keep the writer alive so we don't accidentally send EOF to the program
-    let mut _kept_writer = None;
+
     
     // Write input
     if let Some(inp) = input_text {
         std::thread::sleep(Duration::from_millis(50)); // Allow process to launch
         
         let processed_inp = inp.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t");
+        let lines: Vec<&str> = processed_inp.lines().collect();
         
         // We ignore EIO (os error 5) when taking writer or writing, 
         // as it happens if the process exits instantly before we can write.
         if let Ok(mut writer) = pair.master.take_writer() {
-            let _ = writer.write_all(processed_inp.as_bytes());
-            _kept_writer = Some(writer);
+            for line in lines {
+                // Wait until stdout goes quiet (program is likely blocked on input)
+                loop {
+                    match idle_rx.recv_timeout(Duration::from_millis(150)) {
+                        Ok(_) => continue, // Activity detected, reset timer
+                        Err(_) => break,   // Timeout (idle) or disconnected
+                    }
+                }
+                
+                let mut l = line.to_string();
+                l.push('\n');
+                let _ = writer.write_all(l.as_bytes());
+            }
+            // Send Ctrl+D (EOF) to the PTY so scanner stops hanging
+            loop {
+                match idle_rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(_) => continue,
+                    Err(_) => break,
+                }
+            }
+            let _ = writer.write_all(&[0x04]);
+            // writer drops here
         }
     }
     

@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+source .env 2>/dev/null || true
+
+echo -e "\n========================================"
+echo -e "       API & Model Connection Test      "
+echo -e "========================================\n"
+
+function test_model() {
+    local type=$1
+    local provider=$2
+    local model=$3
+    local key=$4
+    local base=$5
+    
+    # Fallback to GEMINI_API_KEY if provider is gemini and specific key is empty
+    if [ "$provider" == "gemini" ] && [ -z "$key" ]; then
+        key=$GEMINI_API_KEY
+    fi
+
+    echo -e "Testing $type Model ($provider: $model) ..."
+    
+    if [ "$provider" == "gemini" ]; then
+        if [ -z "$key" ]; then
+            echo -e "❌ Failed: GEMINI_API_KEY is not set.\n"
+            return
+        fi
+
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"contents":[{"parts":[{"text":"hi hello"}]}]}' \
+            "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}")
+            
+        status=$(echo "$response" | tail -n1)
+        body=$(echo "$response" | sed '$d')
+        
+        if [ "$status" -eq 200 ]; then
+            reply=$(echo "$body" | grep -o '"text": *"[^"]*"' | head -1 | cut -d'"' -f4)
+            echo -e "✅ OK | Reply: $reply\n"
+        else
+            echo -e "❌ Failed (HTTP $status)\n"
+        fi
+        
+    elif [ "$provider" == "openai_compatible" ]; then
+        if [ -z "$key" ] || [ -z "$base" ]; then
+            echo -e "❌ Failed: Missing API_KEY or BASE_URL for $type.\n"
+            return
+        fi
+
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $key" \
+            -H 'Content-Type: application/json' \
+            -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi hello\"}]}" \
+            "$base/chat/completions")
+            
+        status=$(echo "$response" | tail -n1)
+        body=$(echo "$response" | sed '$d')
+        
+        if [ "$status" -eq 200 ]; then
+            reply=$(echo "$body" | grep -o '"content": *"[^"]*"' | head -1 | cut -d'"' -f4)
+            echo -e "✅ OK | Reply: $reply\n"
+        else
+            echo -e "❌ Failed (HTTP $status)\n"
+        fi
+        
+    else
+        echo -e "⚠️ Unknown provider: $provider\n"
+    fi
+}
+
+# Test Code Generation Model
+if [ -n "$CODE_PROVIDER" ] && [ -n "$CODE_MODEL" ]; then
+    test_model "Code" "$CODE_PROVIDER" "$CODE_MODEL" "$CODE_API_KEY" "$CODE_BASE_URL"
+else
+    echo -e "⚠️ Code Model settings not found in .env\n"
+fi
+
+# Test Input Generation Model
+if [ -n "$INPUT_PROVIDER" ] && [ -n "$INPUT_MODEL" ]; then
+    test_model "Input" "$INPUT_PROVIDER" "$INPUT_MODEL" "$INPUT_API_KEY" "$INPUT_BASE_URL"
+else
+    echo -e "⚠️ Input Model settings not found in .env\n"
+fi
+
+echo -e "========================================\n"

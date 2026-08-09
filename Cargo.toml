@@ -51,3 +51,13 @@ portable-pty = { version = "0.8" }
 serde        = { version = "1", features = ["derive"] }
 directories  = { version = "5" }
 hostname     = { version = "0.4" }
+
+# HTTP Client and Env Vars
+reqwest      = { version = "0.12", features = ["json"] }
+dotenvy      = { version = "0.15" }
+
+# Document generation and file finding
+docx-rs = "0.3"
+
+ignore = "0.4"
+natord = "1.0"

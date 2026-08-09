@@ -10,7 +10,22 @@ Ensure you have Rust installed, then build the project:
 cargo build --release
 ```
 
+## AI & Environment Setup
+
+SaveCodex leverages AI (like Gemini, Groq, or Ollama) for intelligent code generation and automation (used by the `solve` command or internal AI modules). 
+
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+2. Open `.env` and fill in your preferred API keys. By default, SaveCodex uses Google Gemini, but you can configure any OpenAI-compatible provider (Groq, Ollama, etc.) for either code generation or input generation.
+3. Verify your keys are working by running the included utility script:
+   ```bash
+   ./apitest
+   ```
+
 ## CLI Usage
+
 
 SaveCodex provides several commands to handle different workflows. You can run the CLI via `cargo run -- <command>` or by executing the compiled binary directly.
 
@@ -27,14 +42,19 @@ savecodex serve --host 127.0.0.1 --port 7878
 ---
 
 ### 2. `pack`
-Reads all source code files in a specified folder, executes them to capture their output, and packages everything (code + output) into beautifully formatted DOCX and PDF documents.
+Reads all source code files matching specific extensions in a top-level folder, uses AI to generate mock `stdin` for each, executes them to capture their output (with `term_gen`), and packages everything into beautifully formatted DOCX and PDF documents.
 
 **Usage:**
 ```bash
-savecodex pack <folder_path> -o <output_path>
+savecodex pack <folder_path> -o <output_path> --ext java,py --doc-title "Assignment"
 ```
 - `<folder_path>`: The directory containing your source code files.
-- `-o, --output`: The base name for the output files. SaveCodex will generate both `<output_path>.docx` and `<output_path>.pdf`.
+- `-o, --output`: The base name for the output files (`.docx` and `.pdf`).
+- `--ext`: Comma-separated list of file extensions to include (e.g., `java,py,rs`).
+- `--doc-title`: Main heading for the document.
+- `--doc-text`: Optional description text under the heading.
+
+*(Note: `pack` also supports all the terminal styling arguments available in the `term` command, such as `--theme`, `--font-size`, `--style`, etc.)*
 
 ---
 

@@ -15,6 +15,8 @@ struct Cli {
     command: Commands,
 }
 
+// Format enum removed since we only support Docx now
+
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Commands {
@@ -34,9 +36,67 @@ enum Commands {
         /// Folder containing source files.
         folder: PathBuf,
 
-        /// Output file (without extension — both .docx and .pdf are written).
+        /// Output file (without extension). Defaults to <folder_name>_pack.
         #[arg(short, long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
+
+        /// Comma-separated list of file extensions to include (e.g., "java,py,rs")
+        #[arg(long, value_delimiter = ',')]
+        ext: Vec<String>,
+
+        /// Main heading for the document. Defaults to folder name.
+        #[arg(long)]
+        doc_title: Option<String>,
+
+        /// Description text to appear below the main heading
+        #[arg(long)]
+        doc_text: Option<String>,
+
+        // Output format is always DOCX now
+
+        /// Window title bar text.
+        #[arg(short, long, default_value = "bash")]
+        title: String,
+
+        /// Font size in pixels.
+        #[arg(long, default_value_t = 18.0)]
+        font_size: f32,
+
+        /// Color theme (dark or light).
+        #[arg(long, default_value = "dark")]
+        theme: String,
+
+        /// Prompt string to highlight.
+        #[arg(long, default_value = "$ ")]
+        prompt: String,
+
+        /// Disable prompt highlighting.
+        #[arg(long)]
+        no_prompt_highlight: bool,
+
+        /// Padding around text.
+        #[arg(long, default_value_t = 28)]
+        padding: i32,
+
+        /// Window style (windows, macos, linux).
+        #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows)]
+        style: crate::term_gen::WindowStyle,
+
+        /// Realistic prompt username.
+        #[arg(long)]
+        username: Option<String>,
+
+        /// Realistic prompt hostname.
+        #[arg(long)]
+        hostname: Option<String>,
+
+        /// Realistic prompt current working directory.
+        #[arg(long)]
+        cwd: Option<String>,
+
+        /// Add a page break after each file's output.
+        #[arg(long)]
+        page_break: bool,
     },
 
     /// Read questions from a PDF/DOCX, write code via AI, run it, export to DOCX + PDF.
@@ -130,9 +190,66 @@ pub async fn run() -> Result<()> {
         Commands::Serve { host, port } => {
             server::start(&host, port).await?;
         }
-        Commands::Pack { folder, output } => {
-            println!("[pack] folder={} output={}", folder.display(), output.display());
-            todo!("pack implementation")
+        Commands::Pack {
+            folder,
+            output,
+            ext,
+            doc_title,
+            doc_text,
+            // format removed
+            title,
+            font_size,
+            theme,
+            prompt,
+            no_prompt_highlight,
+            padding,
+            style,
+            username,
+            hostname,
+            cwd,
+            page_break,
+        } => {
+            let resolved_username = username.unwrap_or_else(|| {
+                std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_else(|_| "local".to_string())
+            });
+
+            let resolved_hostname = hostname.unwrap_or_else(|| {
+                hostname::get()
+                    .unwrap_or_else(|_| std::ffi::OsString::from("host"))
+                    .to_string_lossy()
+                    .into_owned()
+            });
+
+            let resolved_cwd = cwd.unwrap_or_else(|| {
+                if let Ok(path) = std::env::current_dir() {
+                    let mut path_str = path.to_string_lossy().into_owned();
+                    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+                        if path_str.starts_with(&home) {
+                            path_str = path_str.replacen(&home, "~", 1);
+                        }
+                    }
+                    path_str
+                } else {
+                    "~".to_string()
+                }
+            });
+
+            let opts = crate::term_gen::TermGenOptions {
+                title,
+                font_size,
+                theme,
+                prompt,
+                no_prompt_highlight,
+                padding,
+                style,
+                username: resolved_username,
+                hostname: resolved_hostname,
+                cwd: resolved_cwd,
+            };
+
+            crate::pack::run_pack(&folder, output.as_deref(), &ext, doc_title.as_deref(), doc_text.as_deref(), page_break, &opts).await?;
         }
         Commands::Solve { input, output } => {
             println!("[solve] input={} output={}", input.display(), output.display());

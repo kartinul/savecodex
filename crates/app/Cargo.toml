@@ -29,3 +29,9 @@ portable-pty           = { workspace = true }
 serde                  = { workspace = true }
 directories            = { workspace = true }
 hostname               = { workspace = true }
+reqwest                = { workspace = true }
+dotenvy                = { workspace = true }
+docx-rs                = { workspace = true }
+
+ignore                 = { workspace = true }
+natord                 = { workspace = true }

@@ -1,4 +1,4 @@
-.PHONY: dev build serve clean install
+.PHONY: dev build serve clean install test
 
 # ── Install frontend deps ────────────────────────────────────────────────── #
 install:
@@ -27,3 +27,7 @@ dev: install
 clean:
 	cargo clean
 	rm -rf frontend/dist frontend/node_modules
+
+# ── Test pack command ───────────────────────────────────────────────────── #
+test:
+	cargo run -- pack ./test --ext java --style macos --theme dark --page-break
