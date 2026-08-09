@@ -2,6 +2,7 @@ mod cli;
 mod embed;
 mod routes;
 mod server;
+mod term_gen;
 
 use anyhow::Result;
 

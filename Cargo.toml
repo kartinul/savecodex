@@ -40,3 +40,8 @@ tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
 
 # MIME type detection
 mime_guess   = { version = "2" }
+
+# image rendering
+image        = { version = "0.24", default-features = false, features = ["png"] }
+ab_glyph     = "0.2"
+imageproc    = { version = "0.23", default-features = false }
