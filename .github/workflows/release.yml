@@ -33,6 +33,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build Frontend
+        run: cd frontend && bun install && bun run build
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
         
