@@ -50,32 +50,59 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
 
     match config.provider {
         Provider::Gemini => {
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                config.model, config.api_key
-            );
-            let body = json!({
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }]
-            });
+            let models: Vec<&str> = config.model.split(',').collect();
+            let mut last_err = None;
 
-            let res: Value = client.post(&url).json(&body).send().await?.json().await?;
-            
-            let text = res["candidates"][0]["content"]["parts"][0]["text"].as_str();
+            for model in models {
+                let url = format!(
+                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                    model.trim(), config.api_key
+                );
+                let body = json!({
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }]
+                });
+
+                let resp = match client.post(&url).json(&body).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_err = Some(anyhow::anyhow!("Request failed for {}: {}", model.trim(), e));
+                        continue;
+                    }
+                };
                 
-            match text {
-                Some(t) => Ok(t.to_string()),
-                None => {
-                    let finish_reason = res["candidates"][0]["finishReason"].as_str();
-                    if finish_reason == Some("STOP") {
-                        // Gemini returned empty content, which means the program needs NO input!
-                        Ok("".to_string())
-                    } else {
-                        anyhow::bail!("Failed to extract text from Gemini response. Raw response: {}", serde_json::to_string_pretty(&res).unwrap_or_default())
+                if !resp.status().is_success() {
+                    last_err = Some(anyhow::anyhow!("HTTP error for {}: {}", model.trim(), resp.status()));
+                    continue;
+                }
+
+                let res: Value = match resp.json().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        last_err = Some(anyhow::anyhow!("JSON error for {}: {}", model.trim(), e));
+                        continue;
+                    }
+                };
+                
+                let text = res["candidates"][0]["content"]["parts"][0]["text"].as_str();
+                    
+                match text {
+                    Some(t) => return Ok(t.to_string()),
+                    None => {
+                        let finish_reason = res["candidates"][0]["finishReason"].as_str();
+                        if finish_reason == Some("STOP") {
+                            // Gemini returned empty content, which means the program needs NO input!
+                            return Ok("".to_string());
+                        } else {
+                            last_err = Some(anyhow::anyhow!("Failed to extract text from {}. Raw: {}", model.trim(), serde_json::to_string_pretty(&res).unwrap_or_default()));
+                            continue;
+                        }
                     }
                 }
             }
+            
+            anyhow::bail!("All specified Gemini models failed. Last error: {:?}", last_err)
         }
         Provider::OpenAiCompatible => {
             let url = format!("{}/chat/completions", config.base_url.as_ref().unwrap());

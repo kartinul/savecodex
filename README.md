@@ -42,20 +42,27 @@ savecodex serve --host 127.0.0.1 --port 7878
 ---
 
 ### 2. `pack`
-Reads all source code files matching specific extensions in a top-level folder, uses AI to generate mock `stdin` for each, executes them to capture their output (with `term_gen`), and packages everything into beautifully formatted DOCX and PDF documents.
+Reads all source code files matching specific extensions in one or more files/folders, uses AI to generate mock `stdin` for each, executes them to capture their output (with `term_gen`), and packages everything into beautifully formatted DOCX documents.
 
 **Usage:**
 ```bash
-savecodex pack <folder_path> -o <output_path> --ext java,py --doc-title "Assignment"
+savecodex pack <folder_paths...> -o <output_path> --ext java,py --doc-title "Assignment {}"
 ```
-- `<folder_path>`: The directory containing your source code files.
-- `-o, --output`: The base name for the output files (`.docx` and `.pdf`).
+- `<folder_paths...>`: One or more files or directories containing your source code (e.g., `Week*/` or `main.rs`).
+- `-o, --output`: The base name for the output files (`.docx`). Supports the `{}` placeholder to dynamically insert the file/folder name.
 - `--ext`: Comma-separated list of file extensions to include (e.g., `java,py,rs`).
-- `--doc-title`: Main heading for the document.
-- `--doc-text`: Optional description text under the heading.
+- `--doc-title`: Main heading for the document. Supports the `{}` placeholder.
+- `--doc-text`: Optional description text under the heading. Supports the `{}` placeholder.
 
 *(Note: `pack` also supports all the terminal styling arguments available in the `term` command, such as `--theme`, `--font-size`, `--style`, etc.)*
 
+**Configuring Defaults via `.env`:**
+You can set default values for any `pack` argument in your `.env` file to avoid passing them in the CLI:
+```env
+SAVECODEX_STYLE=macos
+SAVECODEX_OUTPUT="1234567890_{}.docx"
+SAVECODEX_DOC_TEXT="\nJohn Doe - 1234567890 - {}\n"
+```
 ---
 
 ### 3. `solve`

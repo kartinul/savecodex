@@ -33,23 +33,24 @@ enum Commands {
 
     /// Run code files in a folder and package them with output into DOCX + PDF.
     Pack {
-        /// Folder containing source files.
-        folder: PathBuf,
+        /// Files or folders to pack.
+        #[arg(help = "Files or folders to pack.", required = true)]
+        folders: Vec<PathBuf>,
 
         /// Output file (without extension). Defaults to <folder_name>_pack.
-        #[arg(short, long)]
+        #[arg(short, long, env = "SAVECODEX_OUTPUT")]
         output: Option<PathBuf>,
 
         /// Comma-separated list of file extensions to include (e.g., "java,py,rs")
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long, value_delimiter = ',', env = "SAVECODEX_EXT")]
         ext: Vec<String>,
 
         /// Main heading for the document. Defaults to folder name.
-        #[arg(long)]
+        #[arg(long, env = "SAVECODEX_DOC_TITLE")]
         doc_title: Option<String>,
 
         /// Description text to appear below the main heading
-        #[arg(long)]
+        #[arg(long, env = "SAVECODEX_DOC_TEXT")]
         doc_text: Option<String>,
 
         // Output format is always DOCX now
@@ -79,7 +80,7 @@ enum Commands {
         padding: i32,
 
         /// Window style (windows, macos, linux).
-        #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows)]
+        #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows, env = "SAVECODEX_STYLE")]
         style: crate::term_gen::WindowStyle,
 
         /// Realistic prompt username.
@@ -191,7 +192,7 @@ pub async fn run() -> Result<()> {
             server::start(&host, port).await?;
         }
         Commands::Pack {
-            folder,
+            folders,
             output,
             ext,
             doc_title,
@@ -249,7 +250,38 @@ pub async fn run() -> Result<()> {
                 cwd: resolved_cwd,
             };
 
-            crate::pack::run_pack(&folder, output.as_deref(), &ext, doc_title.as_deref(), doc_text.as_deref(), page_break, &opts).await?;
+            if folders.len() > 1 {
+                if let Some(out) = &output {
+                    if !out.to_string_lossy().contains("{}") {
+                        anyhow::bail!("When packing multiple inputs, the --output flag must contain the '{{}}' placeholder to avoid overwriting files.");
+                    }
+                }
+            }
+
+            for folder in folders {
+                let folder_name = folder.file_name().and_then(|n| n.to_str()).unwrap_or("folder");
+                
+                let resolved_output = output.as_ref().map(|o| {
+                    PathBuf::from(o.to_string_lossy().replace("{}", folder_name))
+                });
+                
+                let resolved_doc_title = doc_title.as_ref().map(|t| t.replace("{}", folder_name));
+                let resolved_doc_text = doc_text.as_ref().map(|t| t.replace("{}", folder_name));
+
+                println!("📦 Packing: {}", folder.display());
+                if let Some(ref out) = resolved_output {
+                    println!("   📄 Output: {}", out.display());
+                }
+                println!("   🎨 Style: {:?}", opts.style);
+                if let Some(ref title) = resolved_doc_title {
+                    println!("   📝 Title: {}", title);
+                }
+                if let Some(ref text) = resolved_doc_text {
+                    println!("   ℹ️  Text: {}", text.replace('\n', "\\n"));
+                }
+
+                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), page_break, &opts).await?;
+            }
         }
         Commands::Solve { input, output } => {
             println!("[solve] input={} output={}", input.display(), output.display());
