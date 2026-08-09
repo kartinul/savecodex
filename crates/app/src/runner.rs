@@ -142,6 +142,7 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
     
     let child = Arc::new(Mutex::new(pair.slave.spawn_command(cmd)?));
     let child_clone = Arc::clone(&child);
+    drop(pair.slave); 
     
     std::thread::spawn(move || {
         let mut buf = [0u8; 1024];
