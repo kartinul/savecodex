@@ -1,0 +1,98 @@
+{
+  "py": {
+    "run": [
+      "python3",
+      "{file}"
+    ],
+    "windows": {
+      "run": [
+        "python",
+        "{file}"
+      ]
+    }
+  },
+  "rs": {
+    "build": [
+      "rustc",
+      "{file}",
+      "-o",
+      "{dir}/{file_stem}"
+    ],
+    "run": [
+      "{dir}/{file_stem}"
+    ],
+    "windows": {
+      "build": [
+        "rustc",
+        "{file}",
+        "-o",
+        "{dir}/{file_stem}.exe"
+      ],
+      "run": [
+        "{dir}/{file_stem}.exe"
+      ]
+    }
+  },
+  "cpp": {
+    "build": [
+      "g++",
+      "{file}",
+      "-o",
+      "{dir}/{file_stem}"
+    ],
+    "run": [
+      "{dir}/{file_stem}"
+    ],
+    "windows": {
+      "build": [
+        "g++",
+        "{file}",
+        "-o",
+        "{dir}/{file_stem}.exe"
+      ],
+      "run": [
+        "{dir}/{file_stem}.exe"
+      ]
+    }
+  },
+  "c": {
+    "build": [
+      "gcc",
+      "{file}",
+      "-o",
+      "{dir}/{file_stem}"
+    ],
+    "run": [
+      "{dir}/{file_stem}"
+    ],
+    "windows": {
+      "build": [
+        "gcc",
+        "{file}",
+        "-o",
+        "{dir}/{file_stem}.exe"
+      ],
+      "run": [
+        "{dir}/{file_stem}.exe"
+      ]
+    }
+  },
+  "js": {
+    "run": [
+      "node",
+      "{file}"
+    ]
+  },
+  "java": {
+    "build": [
+      "javac",
+      "{file}"
+    ],
+    "run": [
+      "java",
+      "-cp",
+      "{dir}",
+      "{file_stem}"
+    ]
+  }
+}

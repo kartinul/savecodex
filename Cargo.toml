@@ -45,3 +45,9 @@ mime_guess   = { version = "2" }
 image        = { version = "0.24", default-features = false, features = ["png"] }
 ab_glyph     = "0.2"
 imageproc    = { version = "0.23", default-features = false }
+
+# pty / execution
+portable-pty = { version = "0.8" }
+serde        = { version = "1", features = ["derive"] }
+directories  = { version = "5" }
+hostname     = { version = "0.4" }

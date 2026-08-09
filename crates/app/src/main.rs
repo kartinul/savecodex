@@ -3,6 +3,7 @@ mod embed;
 mod routes;
 mod server;
 mod term_gen;
+pub mod runner;
 
 use anyhow::Result;
 

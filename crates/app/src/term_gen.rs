@@ -121,6 +121,13 @@ fn parse_ansi_line(line: &str, default_fg: Rgb) -> Vec<Run> {
                 continue;
             }
         }
+        
+        // Skip unprintable control characters (like \r, \x04, etc.) to prevent missing glyph boxes
+        if chars[i].is_control() && chars[i] != '\u{1b}' {
+            i += 1;
+            continue;
+        }
+        
         cur.push(chars[i]);
         i += 1;
     }

@@ -25,3 +25,7 @@ tracing-subscriber     = { workspace = true }
 image                  = { workspace = true }
 ab_glyph               = { workspace = true }
 imageproc              = { workspace = true }
+portable-pty           = { workspace = true }
+serde                  = { workspace = true }
+directories            = { workspace = true }
+hostname               = { workspace = true }

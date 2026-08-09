@@ -49,11 +49,33 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Compile and run a source code file using pseudo-terminal.
+    Run {
+        /// Source file to execute.
+        file: PathBuf,
+
+        /// Optional stdin input to send to the program.
+        #[arg(short, long)]
+        input: Option<String>,
+
+        /// Optional output file to write the text transcript to instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     /// Generate a terminal window screenshot (for dev/testing purposes).
     Term {
-        /// Input file (reads stdin if omitted).
-        #[arg(short, long)]
-        input: Option<PathBuf>,
+        /// Source file to execute and render.
+        #[arg(long)]
+        runfile: Option<PathBuf>,
+
+        /// Optional stdin input to send to the executing program (used with --runfile).
+        #[arg(long)]
+        input: Option<String>,
+
+        /// Text file to render (if not using --runfile). Reads from stdin if omitted.
+        #[arg(long)]
+        text_file: Option<PathBuf>,
 
         /// Output PNG path.
         #[arg(short, long, default_value = "term.png")]
@@ -88,16 +110,16 @@ enum Commands {
         style: crate::term_gen::WindowStyle,
 
         /// Realistic prompt username.
-        #[arg(long, default_value = "local")]
-        username: String,
+        #[arg(long)]
+        username: Option<String>,
 
         /// Realistic prompt hostname.
-        #[arg(long, default_value = "host")]
-        hostname: String,
+        #[arg(long)]
+        hostname: Option<String>,
 
         /// Realistic prompt current working directory.
-        #[arg(long, default_value = "~")]
-        cwd: String,
+        #[arg(long)]
+        cwd: Option<String>,
     },
 }
 
@@ -116,8 +138,19 @@ pub async fn run() -> Result<()> {
             println!("[solve] input={} output={}", input.display(), output.display());
             todo!("solve implementation")
         }
+        Commands::Run { file, input, output } => {
+            let (_cmd_str, out) = crate::runner::run_file(&file, input.as_deref()).await?;
+            if let Some(path) = output {
+                std::fs::write(&path, out)?;
+                println!("Wrote execution output to {}", path.display());
+            } else {
+                print!("{}", out);
+            }
+        }
         Commands::Term {
+            runfile,
             input,
+            text_file,
             output,
             title,
             font_size,
@@ -130,8 +163,41 @@ pub async fn run() -> Result<()> {
             hostname,
             cwd,
         } => {
+            let resolved_username = username.unwrap_or_else(|| {
+                std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_else(|_| "local".to_string())
+            });
+
+            let resolved_hostname = hostname.unwrap_or_else(|| {
+                hostname::get()
+                    .unwrap_or_else(|_| std::ffi::OsString::from("host"))
+                    .to_string_lossy()
+                    .into_owned()
+            });
+
+            let resolved_cwd = cwd.unwrap_or_else(|| {
+                if let Ok(path) = std::env::current_dir() {
+                    let mut path_str = path.to_string_lossy().into_owned();
+                    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+                        if path_str.starts_with(&home) {
+                            path_str = path_str.replacen(&home, "~", 1);
+                        }
+                    }
+                    path_str
+                } else {
+                    "~".to_string()
+                }
+            });
+
             let mut raw = String::new();
-            if let Some(path) = input {
+            
+            if let Some(rf) = runfile {
+                let (exec_cmd, out) = crate::runner::run_file(&rf, input.as_deref()).await?;
+                // Construct fake prompt
+                let fake_prompt = format!("{}{}\n", prompt, exec_cmd);
+                raw = format!("{}{}", fake_prompt, out);
+            } else if let Some(path) = text_file {
                 raw = std::fs::read_to_string(&path)?;
             } else {
                 use std::io::Read;
@@ -146,9 +212,9 @@ pub async fn run() -> Result<()> {
                 no_prompt_highlight,
                 padding,
                 style,
-                username,
-                hostname,
-                cwd,
+                username: resolved_username,
+                hostname: resolved_hostname,
+                cwd: resolved_cwd,
             };
 
             let img = crate::term_gen::generate_terminal_image(&raw, &opts)?;
