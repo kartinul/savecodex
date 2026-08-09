@@ -55,9 +55,7 @@ enum Commands {
 
         // Output format is always DOCX now
 
-        /// Window title bar text.
-        #[arg(short, long, default_value = "bash")]
-        title: String,
+
 
         /// Font size in pixels.
         #[arg(long, default_value_t = 18.0)]
@@ -142,9 +140,7 @@ enum Commands {
         #[arg(short, long, default_value = "term.png")]
         output: PathBuf,
 
-        /// Window title bar text.
-        #[arg(short, long, default_value = "bash")]
-        title: String,
+
 
         /// Font size in pixels.
         #[arg(long, default_value_t = 18.0)]
@@ -197,8 +193,6 @@ pub async fn run() -> Result<()> {
             ext,
             doc_title,
             doc_text,
-            // format removed
-            title,
             font_size,
             theme,
             prompt,
@@ -238,7 +232,6 @@ pub async fn run() -> Result<()> {
             });
 
             let opts = crate::term_gen::TermGenOptions {
-                title,
                 font_size,
                 theme,
                 prompt,
@@ -301,7 +294,6 @@ pub async fn run() -> Result<()> {
             input,
             text_file,
             output,
-            title,
             font_size,
             theme,
             prompt,
@@ -354,7 +346,6 @@ pub async fn run() -> Result<()> {
             }
 
             let opts = crate::term_gen::TermGenOptions {
-                title,
                 font_size,
                 theme,
                 prompt,

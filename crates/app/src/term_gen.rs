@@ -16,7 +16,6 @@ pub enum WindowStyle {
 }
 
 pub struct TermGenOptions {
-    pub title: String,
     pub font_size: f32,
     pub theme: String,
     pub prompt: String,
@@ -31,7 +30,6 @@ pub struct TermGenOptions {
 impl Default for TermGenOptions {
     fn default() -> Self {
         Self {
-            title: "bash".to_string(),
             font_size: 18.0,
             theme: "dark".to_string(),
             prompt: "$ ".to_string(),
@@ -229,8 +227,14 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         if !opts.no_prompt_highlight && !opts.prompt.is_empty() && line.starts_with(&opts.prompt) {
             let rest = &line[opts.prompt.len()..];
             
-            let cwd_display = if opts.style == WindowStyle::Windows && opts.cwd == "~" {
-                format!("C:\\Users\\{}", opts.username)
+            let cwd_display = if opts.style == WindowStyle::Windows {
+                if opts.cwd == "~" {
+                    format!("C:\\Users\\{}", opts.username)
+                } else if opts.cwd.contains(":\\") || opts.cwd.starts_with('/') {
+                    opts.cwd.clone()
+                } else {
+                    format!("C:\\Users\\{}\\{}", opts.username, opts.cwd)
+                }
             } else if opts.style == WindowStyle::Macos && opts.cwd == "~" {
                 "~".to_string()
             } else {
@@ -260,7 +264,12 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         }
         max_line_w = max_line_w.max(w);
     }
-    let min_title_w = text_width(&font_bold, PxScale::from(opts.font_size * 0.85), &opts.title) + 160;
+    let display_title = match opts.style {
+        WindowStyle::Windows => "Windows PowerShell",
+        WindowStyle::Linux => "Terminal",
+        WindowStyle::Macos => "zsh",
+    };
+    let min_title_w = text_width(&font_bold, PxScale::from(opts.font_size * 0.85), display_title) + 160;
     let content_w = max_line_w.max(min_title_w).max(cell_w as i32 * 20);
 
     let (title_bar_h, content_padding_top) = match opts.style {
@@ -291,7 +300,6 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
                 draw_filled_circle_mut(&mut img, (cx, dot_y), dot_r, Rgba([*r, *g, *b, 255]));
             }
             let title_scale = PxScale::from(opts.font_size * 0.85);
-            let display_title = if opts.title == "bash" { "zsh" } else { &opts.title };
             let title_w = text_width(&font_bold, title_scale, display_title);
             let title_x = (img_w - title_w) / 2;
             let title_col = if opts.theme == "light" { Rgb(0x55, 0x55, 0x55) } else { Rgb(0xbb, 0xbb, 0xbb) };
@@ -317,8 +325,6 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
             let title_scale = PxScale::from(opts.font_size * 0.75);
             let title_col = if opts.theme == "light" { Rgb(0x11, 0x11, 0x11) } else { Rgb(0xdd, 0xdd, 0xdd) };
             
-            let display_title = if opts.title == "bash" { "Windows PowerShell" } else { &opts.title };
-            
             // Center text perfectly in the tab height (using title_scale.y instead of full font_size)
             let tab_text_y = 8 + (title_bar_h - 8 - title_scale.y as i32) / 2;
             draw_text(&mut img, Rgba([title_col.0, title_col.1, title_col.2, 255]), 32, tab_text_y, title_scale, &font_regular, display_title);
@@ -343,7 +349,6 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
             let hb_bg = if opts.theme == "light" { Rgba([235, 235, 235, 255]) } else { Rgba([36, 36, 36, 255]) };
             draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(img_w as u32, title_bar_h as u32), hb_bg);
             let title_scale = PxScale::from(opts.font_size * 0.85);
-            let display_title = if opts.title == "bash" { "Terminal" } else { &opts.title };
             let title_w = text_width(&font_bold, title_scale, display_title);
             let title_x = (img_w - title_w) / 2;
             let title_col = if opts.theme == "light" { Rgb(0x22, 0x22, 0x22) } else { Rgb(0xee, 0xee, 0xee) };

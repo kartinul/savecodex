@@ -3,7 +3,6 @@ members  = ["crates/app"]
 resolver = "2"
 
 [workspace.package]
-name        = "savecodex"
 version     = "1.0.2"
 edition     = "2021"
 authors     = ["kartinul"]
@@ -61,3 +60,4 @@ docx-rs = "0.4"
 
 ignore = "0.4"
 natord = "1.0"
+tempfile = "3"

@@ -30,7 +30,6 @@ pub async fn run_pack(
 
     let mut all_found_files = Vec::new();
     let walker = WalkBuilder::new(folder)
-        .max_depth(Some(1))
         .git_ignore(true)
         .build();
 
@@ -83,8 +82,8 @@ pub async fn run_pack(
     }
 
     files.sort_by(|a, b| {
-        let name_a = a.file_name().unwrap_or_default().to_string_lossy();
-        let name_b = b.file_name().unwrap_or_default().to_string_lossy();
+        let name_a = a.strip_prefix(folder).unwrap_or(a).to_string_lossy();
+        let name_b = b.strip_prefix(folder).unwrap_or(b).to_string_lossy();
         compare(&name_a, &name_b)
     });
 
@@ -93,7 +92,7 @@ pub async fn run_pack(
     let mut pack_items = Vec::new();
 
     for path in &files {
-        let filename = path.file_name().unwrap().to_string_lossy().to_string();
+        let filename = path.strip_prefix(folder).unwrap_or(path).to_string_lossy().to_string();
         info!("Processing file: {}", filename);
 
         let content = fs::read_to_string(path).context("Failed to read file")?;
