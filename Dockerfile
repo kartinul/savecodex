@@ -5,9 +5,9 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-FROM rust:slim AS backend-builder
+FROM rust:slim-bookworm AS backend-builder
 WORKDIR /app
-# openssl-sys needs pkg-config + OpenSSL dev headers to build on Debian-based rust:slim
+# openssl-sys needs pkg-config + OpenSSL dev headers to build
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
