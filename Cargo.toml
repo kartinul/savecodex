@@ -1,0 +1,42 @@
+[workspace]
+members  = ["crates/app"]
+resolver = "2"
+
+[workspace.package]
+name        = "savecodex"
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["SaveCodex Contributors"]
+license     = "MIT"
+repository  = "https://github.com/kartinul/savecodex"
+
+# --------------------------------------------------------------------------- #
+# Workspace-level dependency versions
+# --------------------------------------------------------------------------- #
+[workspace.dependencies]
+
+# CLI
+clap   = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = { version = "1" }
+
+# web framework
+axum         = { version = "0.7", features = ["multipart"] }
+tower-http   = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
+
+# async runtime
+tokio        = { version = "1",  features = ["full"] }
+
+# frontend embedding
+rust-embed   = { version = "8",  features = ["axum-ex"] }
+
+# serialisation
+serde_json   = { version = "1" }
+
+# tracing / logging
+tracing             = { version = "0.1" }
+tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+
+# MIME type detection
+mime_guess   = { version = "2" }

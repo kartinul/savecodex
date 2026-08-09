@@ -1,0 +1,24 @@
+[package]
+name        = "savecodex"
+description = "Export source code to DOCX and PDF."
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[[bin]]
+name = "savecodex"
+path = "src/main.rs"
+
+[dependencies]
+clap        = { workspace = true }
+anyhow      = { workspace = true }
+tokio       = { workspace = true }
+axum        = { workspace = true }
+tower-http  = { workspace = true }
+rust-embed  = { workspace = true }
+mime_guess  = { workspace = true }
+serde_json  = { workspace = true }
+tracing                = { workspace = true }
+tracing-subscriber     = { workspace = true }

@@ -1,0 +1,26 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node.js
+node_modules/
+dist/
+build/
+.svelte-kit/
+.next/
+out/
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+fake-term-source
