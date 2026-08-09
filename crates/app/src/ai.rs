@@ -48,12 +48,16 @@ impl AiConfig {
 async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
     let client = Client::new();
 
+    tracing::debug!("Contacting AI provider...");
+    tracing::trace!("Prompt: {}", prompt);
+
     match config.provider {
         Provider::Gemini => {
             let models: Vec<&str> = config.model.split(',').collect();
             let mut last_err = None;
 
             for model in models {
+                tracing::debug!("Trying Gemini model: {}", model.trim());
                 let url = format!(
                     "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
                     model.trim(), config.api_key
@@ -86,6 +90,8 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
                 };
                 
                 let text = res["candidates"][0]["content"]["parts"][0]["text"].as_str();
+                tracing::debug!("Received response from Gemini model {}", model.trim());
+                tracing::trace!("Response text: {:?}", text);
                     
                 match text {
                     Some(t) => return Ok(t.to_string()),
@@ -105,6 +111,7 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
             anyhow::bail!("All specified Gemini models failed. Last error: {:?}", last_err)
         }
         Provider::OpenAiCompatible => {
+            tracing::debug!("Trying OpenAI compatible model: {}", config.model);
             let url = format!("{}/chat/completions", config.base_url.as_ref().unwrap());
             let body = json!({
                 "model": config.model,
@@ -119,9 +126,11 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
                 .json()
                 .await?;
 
-            res["choices"][0]["message"]["content"]
-                .as_str()
-                .map(|s| s.to_string())
+            tracing::debug!("Received response from OpenAI compatible provider");
+            let text = res["choices"][0]["message"]["content"].as_str();
+            tracing::trace!("Response text: {:?}", text);
+
+            text.map(|s| s.to_string())
                 .context("Failed to extract text from OpenAI compatible response")
         }
     }

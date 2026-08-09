@@ -34,10 +34,11 @@ Starts the backend HTTP API server. This is used to connect the savecodex fronte
 
 **Usage:**
 ```bash
-savecodex serve --host 127.0.0.1 --port 7878
+savecodex serve --host 127.0.0.1 --port 7878 --debug
 ```
 - `--host`: The address to bind the server to (default: `127.0.0.1`).
 - `--port`: The port to listen on (default: `7878`).
+- `--debug`: Enable detailed debug logging, especially for AI provider communications.
 
 ### 2. `pack`
 Reads all source code files matching specific extensions in one or more files/folders, uses AI to generate mock `stdin` for each, executes them to capture their output (with `term_gen`), and packages everything into beautifully formatted DOCX documents.

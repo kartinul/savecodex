@@ -89,13 +89,18 @@ pub fn load_configurations() -> Result<HashMap<String, LangConfig>> {
 }
 
 pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, String)> {
+    tracing::debug!("run_file called for: {:?}", file);
+    tracing::trace!("input_text provided: {:?}", input_text);
+    
     let ext = file.extension().and_then(|s| s.to_str()).context("File has no extension")?;
     let configs = load_configurations()?;
     let config = configs.get(ext).with_context(|| format!("No configuration for extension: {}", ext))?;
+    tracing::debug!("Loaded config for extension {}: {:?}", ext, config);
     
     if let Some(build_args) = &config.build {
         let args = replace_vars(build_args, file);
         if args.is_empty() { bail!("Empty build command"); }
+        tracing::debug!("Running build command: {:?}", args);
         
         let child = std::process::Command::new(&args[0])
             .args(&args[1..])
@@ -114,6 +119,7 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
     
     let run_args = replace_vars(&config.run, file);
     if run_args.is_empty() { bail!("Empty run command"); }
+    tracing::debug!("Running execution command in PTY: {:?}", run_args);
     
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
@@ -148,7 +154,10 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         let _ = tx.send(output);
     });
     
+    tracing::debug!("Spawned child process and output reader thread");
+
     if let Some(inp) = input_text {
+        tracing::debug!("Starting to send input text to PTY process");
         std::thread::sleep(Duration::from_millis(50)); // Allow process to launch
         
         let processed_inp = inp.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t");
@@ -194,6 +203,8 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         }
     })).await;
     
+    tracing::debug!("Child process execution finished, wait_res: {:?}", wait_res.is_ok());
+
     match wait_res {
         Ok(Ok(Ok(_status))) => {
             drop(pair.master);
@@ -207,6 +218,7 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
             bail!("Join error: {}", e);
         },
         Err(_) => {
+            tracing::warn!("Execution timeout! Killing child process.");
             let _ = child.lock().unwrap().kill(); // Kill the runaway process!
             drop(pair.master);
             let partial = rx.recv().unwrap_or_default();
@@ -214,6 +226,8 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
             return Ok((executed_cmd, format!("{}\n\n[Timeout after 10 seconds]", partial)));
         }
     }
+    
+    tracing::debug!("Child process exited successfully");
     
     let out = rx.recv().unwrap_or_default();
     let out = out.replace("^D\x08\x08", "").replace("^D", "");

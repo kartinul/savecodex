@@ -43,4 +43,4 @@ COPY --from=backend-builder /app/target/release/savecodex /usr/local/bin/savecod
 ENV PORT=10000
 EXPOSE ${PORT}
 
-CMD ["sh", "-c", "savecodex serve --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "savecodex serve --host 0.0.0.0 --port ${PORT} --debug"]

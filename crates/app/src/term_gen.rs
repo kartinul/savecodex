@@ -177,6 +177,7 @@ fn draw_text(img: &mut RgbaImage, color: Rgba<u8>, x: i32, y: i32, scale: PxScal
 }
 
 pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<RgbaImage> {
+    tracing::debug!("generate_terminal_image called, text length: {}, style: {:?}", raw_text.len(), opts.style);
     let raw = raw_text.trim_end_matches('\n');
 
     let (mut bg, mut title_bg, default_fg, _prompt_color, _chrome_border) = if opts.theme == "light" {

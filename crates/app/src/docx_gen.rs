@@ -17,6 +17,7 @@ pub fn generate_docx(
     items: &[PackItem],
     page_break: bool,
 ) -> Result<()> {
+    tracing::debug!("generate_docx called for output: {:?}, title: {:?}, items count: {}", output, doc_title, items.len());
     let mut docx = Docx::new();
     let title_para = Paragraph::new()
         .align(AlignmentType::Center)
@@ -86,8 +87,11 @@ pub fn generate_docx(
         docx = docx.add_paragraph(h2_para).add_paragraph(code_para).add_paragraph(img_para);
     }
 
+    tracing::debug!("Creating DOCX file at {:?}", output);
     let docx_file = std::fs::File::create(output).context("Failed to create DOCX")?;
+    tracing::debug!("Packing DOCX file...");
     docx.build().pack(docx_file).context("Failed to pack DOCX")?;
+    tracing::debug!("Successfully packed DOCX file");
     
     Ok(())
 }

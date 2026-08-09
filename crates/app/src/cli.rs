@@ -29,6 +29,10 @@ enum Commands {
         /// Port to listen on.
         #[arg(long, default_value_t = 7878)]
         port: u16,
+
+        /// Enable debug logging.
+        #[arg(long)]
+        debug: bool,
     },
 
     /// Run code files in a folder and package them with output into DOCX + PDF.
@@ -184,7 +188,7 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { host, port } => {
+        Commands::Serve { host, port, debug: _ } => {
             server::start(&host, port).await?;
         }
         Commands::Pack {

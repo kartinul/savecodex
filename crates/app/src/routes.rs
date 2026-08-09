@@ -20,6 +20,7 @@ pub fn api_router() -> Router {
 
 /// POST /api/pack — multipart upload of source files (field name = relative path).
 async fn pack(mut multipart: Multipart) -> impl IntoResponse {
+    tracing::debug!("Received /api/pack request, starting multipart parsing");
     let temp_dir = match tempfile::tempdir() {
         Ok(dir) => dir,
         Err(e) => {
@@ -50,9 +51,12 @@ async fn pack(mut multipart: Multipart) -> impl IntoResponse {
     let mut ai_model = String::new();
     let mut ai_base_url = String::new();
 
+    tracing::debug!("Extracting multipart fields...");
     while let Some(field) = multipart.next_field().await.unwrap_or(None) {
         let field_name = field.name().unwrap_or("unknown").to_string();
         let file_name = field.file_name().map(|s| s.to_string());
+        
+        tracing::debug!("Processing field: {}, file_name: {:?}", field_name, file_name);
 
         if file_name.is_some() {
             // It's a file. Reconstruct the structure in temp dir using field_name (webkitRelativePath)
@@ -110,6 +114,8 @@ async fn pack(mut multipart: Multipart) -> impl IntoResponse {
             }
         }
     }
+
+    tracing::debug!("Finished extracting multipart fields. Files received: {}", got_files);
 
     let env_admin_pwd = std::env::var("ADMIN_PASSWORD").unwrap_or_default();
     let mut final_api_key = gemini_api_key.clone();
@@ -216,6 +222,7 @@ pub struct VerifyAdminPayload {
 }
 
 async fn verify_admin(Json(payload): Json<VerifyAdminPayload>) -> impl IntoResponse {
+    tracing::debug!("Received /api/verify_admin request");
     let env_admin_pwd = std::env::var("ADMIN_PASSWORD").unwrap_or_default();
     let sent_pwd = payload.admin_password.unwrap_or_default();
 

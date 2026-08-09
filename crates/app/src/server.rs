@@ -38,8 +38,11 @@ pub async fn start(host: &str, port: u16) -> Result<()> {
 
 /// Serve embedded frontend assets; fall back to `index.html` for SPA routing.
 async fn spa_handler(uri: Uri) -> Response {
+    tracing::debug!("SPA handler called for URI: {}", uri);
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
+
+    tracing::debug!("Attempting to serve embedded file: {}", path);
 
     match Frontend::get(path) {
         Some(file) => {
