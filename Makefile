@@ -30,4 +30,4 @@ clean:
 
 # ── Test pack command ───────────────────────────────────────────────────── #
 test:
-	cargo run -- pack ./test --ext java --style macos --theme dark --page-break
+	cargo run -- pack ./test --style macos --theme dark --page-break

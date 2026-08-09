@@ -300,7 +300,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         }
         WindowStyle::Windows => {
             let win_tab_bg = if opts.theme == "light" { Rgba([243, 243, 243, 255]) } else { Rgba([28, 28, 28, 255]) };
-            let win_active_tab = Rgba([bg.0, bg.1, bg.2, 255]); // match body bg
+            let win_active_tab = if opts.theme == "light" { Rgba([255, 255, 255, 255]) } else { Rgba([16, 16, 16, 255]) };
 
             draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(img_w as u32, title_bar_h as u32), win_tab_bg);
             let tab_w = 240.min(img_w - 150);
@@ -319,9 +319,15 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
             
             let display_title = if opts.title == "bash" { "Windows PowerShell" } else { &opts.title };
             
-            // Re-align the text slightly lower (y=16 instead of 14) so it's perfectly centered in the 34px tall tab
-            let tab_text_y = 8 + (title_bar_h - 8 - opts.font_size as i32) / 2;
-            draw_text(&mut img, Rgba([title_col.0, title_col.1, title_col.2, 255]), 24, tab_text_y, title_scale, &font_regular, display_title);
+            // Center text perfectly in the tab height (using title_scale.y instead of full font_size)
+            let tab_text_y = 8 + (title_bar_h - 8 - title_scale.y as i32) / 2;
+            draw_text(&mut img, Rgba([title_col.0, title_col.1, title_col.2, 255]), 32, tab_text_y, title_scale, &font_regular, display_title);
+
+            let tab_x_icon_col = if opts.theme == "light" { Rgba([100, 100, 100, 255]) } else { Rgba([150, 150, 150, 255]) };
+            let tab_x_cx = 10 + tab_w - 20;
+            let tab_x_cy = 8 + (title_bar_h - 8) / 2;
+            draw_line_segment_mut(&mut img, ((tab_x_cx - 4) as f32, (tab_x_cy - 4) as f32), ((tab_x_cx + 4) as f32, (tab_x_cy + 4) as f32), tab_x_icon_col);
+            draw_line_segment_mut(&mut img, ((tab_x_cx - 4) as f32, (tab_x_cy + 4) as f32), ((tab_x_cx + 4) as f32, (tab_x_cy - 4) as f32), tab_x_icon_col);
 
             let ctrl_w = 46;
             let right = img_w;

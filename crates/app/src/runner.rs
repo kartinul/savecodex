@@ -10,9 +10,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use directories::ProjectDirs;
 
 #[derive(Deserialize, Debug, Clone)]
-struct LangConfig {
-    build: Option<Vec<String>>,
-    run: Vec<String>,
+pub struct LangConfig {
+    pub build: Option<Vec<String>>,
+    pub run: Vec<String>,
     #[serde(default)]
     windows: Option<OsSpecificConfig>,
     #[serde(default)]
@@ -22,9 +22,9 @@ struct LangConfig {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct OsSpecificConfig {
-    build: Option<Vec<String>>,
-    run: Option<Vec<String>>,
+pub struct OsSpecificConfig {
+    pub build: Option<Vec<String>>,
+    pub run: Option<Vec<String>>,
 }
 
 impl LangConfig {
@@ -58,13 +58,11 @@ fn replace_vars(args: &[String], file: &Path) -> Vec<String> {
     }).collect()
 }
 
-fn load_configurations() -> Result<HashMap<String, LangConfig>> {
-    // 1. Embedded Defaults
+pub fn load_configurations() -> Result<HashMap<String, LangConfig>> {
     let embedded_str = include_str!("default_languages.json");
     let mut configs: HashMap<String, LangConfig> = serde_json::from_str(embedded_str)
         .context("Failed to parse embedded default_languages.json")?;
 
-    // 2. Global Overrides
     if let Some(proj_dirs) = ProjectDirs::from("", "", "savecodex") {
         let global_config = proj_dirs.config_dir().join("languages.json");
         if global_config.exists() {
@@ -76,7 +74,6 @@ fn load_configurations() -> Result<HashMap<String, LangConfig>> {
         }
     }
 
-    // 3. Local Overrides
     let local_config = Path::new("languages.json");
     if local_config.exists() {
         if let Ok(content) = std::fs::read_to_string(local_config) {
@@ -86,7 +83,6 @@ fn load_configurations() -> Result<HashMap<String, LangConfig>> {
         }
     }
 
-    // 4. Resolve OS overrides
     let configs = configs.into_iter().map(|(k, v)| (k, v.resolve_os())).collect();
 
     Ok(configs)
@@ -97,7 +93,6 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
     let configs = load_configurations()?;
     let config = configs.get(ext).with_context(|| format!("No configuration for extension: {}", ext))?;
     
-    // 1. Build
     if let Some(build_args) = &config.build {
         let args = replace_vars(build_args, file);
         if args.is_empty() { bail!("Empty build command"); }
@@ -117,7 +112,6 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         }
     }
     
-    // 2. Run with PTY
     let run_args = replace_vars(&config.run, file);
     if run_args.is_empty() { bail!("Empty run command"); }
     
@@ -154,17 +148,12 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         let _ = tx.send(output);
     });
     
-
-    
-    // Write input
     if let Some(inp) = input_text {
         std::thread::sleep(Duration::from_millis(50)); // Allow process to launch
         
         let processed_inp = inp.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t");
         let lines: Vec<&str> = processed_inp.lines().collect();
         
-        // We ignore EIO (os error 5) when taking writer or writing, 
-        // as it happens if the process exits instantly before we can write.
         if let Ok(mut writer) = pair.master.take_writer() {
             for line in lines {
                 // Wait until stdout goes quiet (program is likely blocked on input)
@@ -179,19 +168,19 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
                 l.push('\n');
                 let _ = writer.write_all(l.as_bytes());
             }
-            // Send Ctrl+D (EOF) to the PTY so scanner stops hanging
             loop {
                 match idle_rx.recv_timeout(Duration::from_millis(100)) {
                     Ok(_) => continue,
                     Err(_) => break,
                 }
             }
-            let _ = writer.write_all(&[0x04]);
-            // writer drops here
+            #[cfg(windows)]
+            let _ = writer.write_all(&[0x1A]); // Ctrl+Z for Windows EOF
+            #[cfg(not(windows))]
+            let _ = writer.write_all(&[0x04]); // Ctrl+D for UNNIX EOF
         }
     }
     
-    // Wait for process with 10s timeout
     let wait_res = timeout(Duration::from_secs(10), tokio::task::spawn_blocking(move || {
         loop {
             let mut c = child_clone.lock().unwrap();
@@ -227,7 +216,6 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
     }
     
     let out = rx.recv().unwrap_or_default();
-    // Strip literal ^D (often echoed by the terminal driver on EOF) and its trailing backspaces
     let out = out.replace("^D\x08\x08", "").replace("^D", "");
     
     let executed_cmd = run_args.join(" ");
