@@ -33,6 +33,6 @@ git add Cargo.toml Cargo.lock frontend/package.json
 if ! git diff --cached --quiet; then
   git commit -m "Bump version to v$NEW_VERSION"
 fi
-git tag "v$NEW_VERSION"
+git tag -a "v$NEW_VERSION" -m "v$NEW_VERSION"
 
 echo "✅ Done! Run 'git push --follow-tags' to push the release."
