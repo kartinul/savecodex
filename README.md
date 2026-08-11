@@ -3,6 +3,10 @@
 savecodex reads all the files in the folder you select, generate input automatically using ai, types those inputs, takes screenshots, makes documents and downloads it (docx).
 Just select your folder and enter your GEMINI API KEY to begin with.
 
+## Demo
+### The GEMINI key varient
+https://youtu.be/-i_L3jEiWxc
+
 ## Installation
 
 Ensure you have Rust installed, then build the project:
