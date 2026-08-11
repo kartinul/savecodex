@@ -6,6 +6,8 @@ Just select your folder and enter your GEMINI API KEY to begin with.
 ## Demo
 ### The GEMINI key varient
 https://youtu.be/-i_L3jEiWxc
+### The ADMIN key varient
+https://youtu.be/8jD1Prdp1cc
 
 ## Installation
 
