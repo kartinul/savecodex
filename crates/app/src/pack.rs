@@ -14,6 +14,7 @@ pub async fn run_pack(
     doc_text: Option<&str>,
     page_break: bool,
     opts: &crate::term_gen::TermGenOptions,
+    ai_config: Option<crate::ai::AiConfig>,
 ) -> Result<()> {
     tracing::debug!("run_pack called with folder: {:?}, output: {:?}, extensions: {:?}", folder, output, extensions);
     info!("Starting pack command for folder: {}", folder.display());
@@ -100,7 +101,7 @@ pub async fn run_pack(
         let content = fs::read_to_string(path).context("Failed to read file")?;
         
         tracing::debug!("Generating AI input for {}", filename);
-        let input_text = match crate::ai::generate_input(&[(&filename, &content)]).await {
+        let input_text = match crate::ai::generate_input(&[(&filename, &content)], ai_config.as_ref()).await {
             Ok(t) => {
                 tracing::debug!("AI generated input text for {}: {:?}", filename, t);
                 t
@@ -113,8 +114,14 @@ pub async fn run_pack(
         };
 
         tracing::debug!("Running file {} in runner", filename);
-        let (_cmd, out) = crate::runner::run_file(path, if input_text.is_empty() { None } else { Some(&input_text) }).await?;
-        tracing::debug!("Finished running file {}. Command: {}, Output length: {}", filename, _cmd, out.len());
+        let run_result = crate::runner::run_file(path, if input_text.is_empty() { None } else { Some(&input_text) }).await;
+        let (_cmd, out) = match run_result {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Failed to run {}: {}", filename, e);
+                (filename.clone(), format!("[Error running file: {}]", e))
+            }
+        };
         
         let mut lines: Vec<&str> = out.split('\n').collect();
         let max_lines = 150;

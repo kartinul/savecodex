@@ -122,23 +122,21 @@ async fn pack(mut multipart: Multipart) -> impl IntoResponse {
 
     if !admin_password.is_empty() && admin_password == env_admin_pwd {
         final_api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    } else if final_api_key.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "API Key is required" }))).into_response();
     }
 
-    if !final_api_key.is_empty() {
-        std::env::set_var("GEMINI_API_KEY", final_api_key.clone());
-        std::env::set_var("INPUT_API_KEY", final_api_key);
-    }
-    if !ai_provider.is_empty() {
-        std::env::set_var("INPUT_PROVIDER", ai_provider);
-    }
-    if !ai_model.is_empty() {
-        std::env::set_var("INPUT_MODEL", ai_model);
-    }
-    if !ai_base_url.is_empty() {
-        std::env::set_var("INPUT_BASE_URL", ai_base_url);
-    }
+    let provider = match ai_provider.as_str() {
+        "openai_compatible" => crate::ai::Provider::OpenAiCompatible,
+        _ => crate::ai::Provider::Gemini,
+    };
+    let model = if ai_model.is_empty() { "gemini-1.5-pro".to_string() } else { ai_model };
+    let base_url = if ai_base_url.is_empty() { None } else { Some(ai_base_url) };
+
+    let ai_config = crate::ai::AiConfig {
+        provider,
+        model,
+        base_url,
+        api_key: final_api_key,
+    };
 
     if !got_files {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "no files uploaded" }))).into_response();
@@ -188,6 +186,7 @@ async fn pack(mut multipart: Multipart) -> impl IntoResponse {
         doc_text_opt,
         page_break,
         &opts,
+        Some(ai_config),
     ).await {
         Ok(_) => {
             let out_docx = output_path.with_extension("docx");

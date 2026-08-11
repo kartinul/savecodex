@@ -176,7 +176,7 @@ const Pack: FC = () => {
 
   const [ext, setExt] = useLocalStorage("savecodex_ext", "");
   const [docTitle, setDocTitle] = useLocalStorage("savecodex_doc_title", "");
-  const [docText, setDocText] = useLocalStorage("savecodex_doc_text", "\nCode with output screenshots of the folder: {}\n");
+  const [docText, setDocText] = useLocalStorage("savecodex_doc_text", "DOCX of: {}");
   const [fontSize, setFontSize] = useLocalStorage("savecodex_font_size", "18");
   const [theme, setTheme] = useLocalStorage("savecodex_theme", "dark");
   const [noPromptHighlight, setNoPromptHighlight] = useLocalStorage("savecodex_no_prompt", false);
@@ -194,7 +194,7 @@ const Pack: FC = () => {
   const resetAdvanced = () => {
     setExt("");
     setDocTitle("{}");
-    setDocText("\nCode with output screenshots of the folder: {}\n");
+    setDocText("DOCX of: {}");
     setFontSize("18");
     setTheme("dark");
     setNoPromptHighlight(false);
@@ -263,17 +263,7 @@ const Pack: FC = () => {
   };
 
   const submit = async () => {
-    let adminPwd = "";
-    try {
-      const adminPwdStr = window.localStorage.getItem("savecodex_admin_pwd");
-      adminPwd = adminPwdStr ? JSON.parse(adminPwdStr) : "";
-    } catch { }
-
     setErrorMessage("");
-    if (!geminiApiKey.trim() && !adminPwd.trim()) {
-      setErrorMessage("API Key is required to process the files using AI!");
-      return;
-    }
 
     const files = inputRef.current?.files;
     if (!files?.length) return;
@@ -574,7 +564,7 @@ const App: FC = () => (
 
     <Flex align="center" gap="2" style={{ marginTop: "auto" }}>
       <Text size="2" color="gray">
-        Made by <a href="https://github.com/kartinul" target="_blank" rel="noopener noreferrer" style={{ color: "var(--blue-9)", textDecoration: "none" }}>kartinul</a> :D
+        Made by <a href="https://github.com/kartinul" target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "none" }}>kartinul</a>
       </Text>
       <a href="https://github.com/kartinul" target="_blank" rel="noopener noreferrer" style={{ color: "var(--gray-11)", display: "flex", alignItems: "center" }}>
         <GitHubLogoIcon width="16" height="16" />

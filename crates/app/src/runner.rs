@@ -165,8 +165,13 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         let lines: Vec<&str> = processed_inp.lines().collect();
         
         if let Ok(mut writer) = pair.master.take_writer() {
+            // Wait for at least one byte of output before sending anything,
+            // so the first prompt is visible before the first input arrives.
+            // Without this, idle_rx is empty at startup and recv_timeout fires
+            // immediately, sending input before the first cout prompt is printed.
+            let _ = idle_rx.recv_timeout(Duration::from_secs(2));
+            
             for line in lines {
-                // Wait until stdout goes quiet (program is likely blocked on input)
                 loop {
                     match idle_rx.recv_timeout(Duration::from_millis(150)) {
                         Ok(_) => continue, // Activity detected, reset timer
@@ -191,7 +196,7 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         }
     }
     
-    let wait_res = timeout(Duration::from_secs(10), tokio::task::spawn_blocking(move || {
+    let wait_res = timeout(Duration::from_secs(5), tokio::task::spawn_blocking(move || {
         loop {
             let mut c = child_clone.lock().unwrap();
             match c.try_wait() {
@@ -220,11 +225,11 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         },
         Err(_) => {
             tracing::warn!("Execution timeout! Killing child process.");
-            let _ = child.lock().unwrap().kill(); // Kill the runaway process!
-            drop(pair.master);
-            let partial = rx.recv().unwrap_or_default();
+            let _ = child.lock().unwrap().kill();
+            drop(pair.master); // Close PTY — signals reader thread to flush and exit
+            let partial = rx.recv().unwrap_or_default(); // Wait for reader thread to finish
             let executed_cmd = run_args.join(" ");
-            return Ok((executed_cmd, format!("{}\n\n[Timeout after 10 seconds]", partial)));
+            return Ok((executed_cmd, format!("{}\n\n[Timeout after 5 seconds]", partial)));
         }
     }
     

@@ -5,20 +5,22 @@ use std::env;
 
 use crate::prompts::{code_generation_prompt, input_generation_prompt};
 
-enum Provider {
+#[derive(Clone, Debug)]
+pub enum Provider {
     Gemini,
     OpenAiCompatible,
 }
 
-struct AiConfig {
-    provider: Provider,
-    model: String,
-    base_url: Option<String>,
-    api_key: String,
+#[derive(Clone, Debug)]
+pub struct AiConfig {
+    pub provider: Provider,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub api_key: String,
 }
 
 impl AiConfig {
-    fn from_env(prefix: &str) -> Result<Self> {
+    pub fn from_env(prefix: &str) -> Result<Self> {
         let provider_str = env::var(format!("{}_PROVIDER", prefix))
             .unwrap_or_else(|_| "gemini".to_string());
         
@@ -124,13 +126,23 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
                 "messages": [{"role": "user", "content": prompt}]
             });
 
-            let res: Value = client.post(&url)
+            let resp = client.post(&url)
                 .bearer_auth(&config.api_key)
                 .json(&body)
                 .send()
-                .await?
-                .json()
                 .await?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let err_text = resp.text().await.unwrap_or_default();
+                let err_lower = err_text.to_lowercase();
+                if status == reqwest::StatusCode::UNAUTHORIZED || err_lower.contains("invalid") || err_lower.contains("api_key") {
+                    anyhow::bail!("Invalid API Key");
+                }
+                anyhow::bail!("HTTP error: {} - {}", status, err_text);
+            }
+
+            let res: Value = resp.json().await?;
 
             tracing::debug!("Received response from OpenAI compatible provider");
             let text = res["choices"][0]["message"]["content"].as_str();
@@ -148,8 +160,15 @@ pub async fn generate_code(system_prompt: &str, question: &str) -> Result<String
     send_request(&config, &prompt).await
 }
 
-pub async fn generate_input(files: &[(&str, &str)]) -> Result<String> {
-    let config = AiConfig::from_env("INPUT")?;
+pub async fn generate_input(files: &[(&str, &str)], config: Option<&AiConfig>) -> Result<String> {
+    let env_config;
+    let final_config = match config {
+        Some(c) => c,
+        None => {
+            env_config = AiConfig::from_env("INPUT")?;
+            &env_config
+        }
+    };
     let prompt = input_generation_prompt(files);
-    send_request(&config, &prompt).await
+    send_request(final_config, &prompt).await
 }
