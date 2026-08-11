@@ -1,6 +1,7 @@
 # savecodex
 
-savecodex is a tool designed to turn coding assignments into beautifully formatted documents. It can package existing code, automatically solve assignment sheets using AI, and spin up an API for a frontend interface.
+savecodex reads all the files in the folder you select, generate input automatically using ai, types those inputs, takes screenshots, makes documents and downloads it (docx).
+Just select your folder and enter your GEMINI API KEY to begin with.
 
 ## Installation
 

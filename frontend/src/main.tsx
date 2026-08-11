@@ -9,7 +9,7 @@ if (!rootEl) throw new Error("Root element not found");
 
 createRoot(rootEl).render(
   <StrictMode>
-    <Theme appearance="dark" accentColor="violet" radius="medium">
+    <Theme appearance="dark">
       <App />
     </Theme>
   </StrictMode>

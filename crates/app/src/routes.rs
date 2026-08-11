@@ -211,7 +211,12 @@ async fn pack(mut multipart: Multipart) -> impl IntoResponse {
         }
         Err(e) => {
             tracing::error!("run_pack failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response()
+            let status = if e.to_string().contains("Invalid API Key") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(json!({ "error": e.to_string() }))).into_response()
         }
     }
 }

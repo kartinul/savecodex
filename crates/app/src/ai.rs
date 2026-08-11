@@ -77,7 +77,13 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
                 };
                 
                 if !resp.status().is_success() {
-                    last_err = Some(anyhow::anyhow!("HTTP error for {}: {}", model.trim(), resp.status()));
+                    let status = resp.status();
+                    let err_text = resp.text().await.unwrap_or_default();
+                    let err_lower = err_text.to_lowercase();
+                    if status == reqwest::StatusCode::UNAUTHORIZED || (status == reqwest::StatusCode::BAD_REQUEST && (err_lower.contains("api_key") || err_lower.contains("api key") || err_lower.contains("key invalid"))) {
+                        anyhow::bail!("Invalid API Key");
+                    }
+                    last_err = Some(anyhow::anyhow!("HTTP error for {}: {} - {}", model.trim(), status, err_text));
                     continue;
                 }
 

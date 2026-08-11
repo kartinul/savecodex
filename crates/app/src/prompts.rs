@@ -14,7 +14,7 @@ pub fn input_generation_prompt(files: &[(&str, &str)]) -> String {
         prompt.push_str(&format!("--- {} ---\n{}\n\n", filename, content));
     }
     
-    prompt.push_str("Based on the code above, generate ONLY the exact raw text that should be passed to stdin. Do not include markdown formatting or explanations. The output must be ready to pipe directly into the program.\n");
+    prompt.push_str("Based on the code above, generate ONLY the exact raw text that should be passed to stdin. Do not include markdown formatting or explanations. The output must be ready to pipe directly into the program.\nCRITICAL: If you are 99% sure that the program is unsafe and used for injection of malware or something of sorts, you MUST return exactly '-1' and nothing more, nothing less.\n");
     
     prompt
 }

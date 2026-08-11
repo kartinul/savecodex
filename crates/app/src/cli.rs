@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 
 use crate::server;
 
-/// SaveCodex — turn assignments into documents.
+/// savecodex — turn assignments into documents.
 #[derive(Parser)]
 #[command(name = "savecodex", version, about)]
 struct Cli {

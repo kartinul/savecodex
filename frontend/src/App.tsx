@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, type FC } from "react";
-import { Flex, Heading, Text, Card, Button, Badge, TextField, Select, Switch, Grid, Box, IconButton, ScrollArea } from "@radix-ui/themes";
-import { FileIcon, GearIcon, LockClosedIcon, CheckIcon, Cross2Icon } from "@radix-ui/react-icons";
+import { Flex, Heading, Text, Card, Button, Badge, TextField, Select, Switch, Grid, Box, IconButton, ScrollArea, Tooltip, Link, Callout } from "@radix-ui/themes";
+import { FileIcon, GearIcon, LockClosedIcon, CheckIcon, Cross2Icon, InfoCircledIcon, QuestionMarkCircledIcon, GitHubLogoIcon } from "@radix-ui/react-icons";
 
 function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => void] {
   const [storedValue, setStoredValue] = useState<T>(() => {
@@ -99,15 +99,16 @@ const AdminKey: FC = () => {
               {hoverVerified ? <Cross2Icon width="16" height="16" /> : <LockClosedIcon width="16" height="16" />}
             </IconButton>
           ) : (
-            <IconButton
-              variant="ghost"
-              color="gray"
-              size="1"
-              onClick={() => setIsExpanded(true)}
-              title="Admin Access"
-            >
-              <LockClosedIcon width="16" height="16" />
-            </IconButton>
+            <Tooltip content="server admin access to bypass api key.">
+              <IconButton
+                variant="ghost"
+                color="gray"
+                size="1"
+                onClick={() => setIsExpanded(true)}
+              >
+                <LockClosedIcon width="16" height="16" />
+              </IconButton>
+            </Tooltip>
           )}
         </Flex>
       </Box>
@@ -163,6 +164,7 @@ const Pack: FC = () => {
   const [loading, setLoading] = useState(false);
   const [folderName, setFolderName] = useState<string>("");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string>("");
 
   // Keep track of the filtered list of files so user knows what will be packed
   const [detectedFiles, setDetectedFiles] = useState<string[]>([]);
@@ -267,8 +269,9 @@ const Pack: FC = () => {
       adminPwd = adminPwdStr ? JSON.parse(adminPwdStr) : "";
     } catch { }
 
+    setErrorMessage("");
     if (!geminiApiKey.trim() && !adminPwd.trim()) {
-      alert("API Key is required to process the files using AI!");
+      setErrorMessage("API Key is required to process the files using AI!");
       return;
     }
 
@@ -307,7 +310,7 @@ const Pack: FC = () => {
       const res = await fetch("/api/pack", { method: "POST", body: form });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Unknown error" }));
-        alert("Error: " + err.error);
+        setErrorMessage("Error: " + err.error);
         return;
       }
 
@@ -330,7 +333,7 @@ const Pack: FC = () => {
       setDetectedExt("");
 
     } catch (e) {
-      alert(String(e));
+      setErrorMessage(String(e));
     } finally {
       setLoading(false);
     }
@@ -352,7 +355,18 @@ const Pack: FC = () => {
             <GearIcon />
           </IconButton>
         </Flex>
-        <Text color="gray" size="2">Select a folder, Paste ur API key, and watch the DOCX get generated :)</Text>
+        <Text color="gray" size="2" style={{ display: 'none' }}>Select a folder, Paste ur API key, and watch the DOCX get generated :)</Text>
+
+        {errorMessage && (
+          <Callout.Root color="red" size="1">
+            <Callout.Icon>
+              <InfoCircledIcon />
+            </Callout.Icon>
+            <Callout.Text>
+              {errorMessage}
+            </Callout.Text>
+          </Callout.Root>
+        )}
 
         <Box
           style={{
@@ -365,6 +379,11 @@ const Pack: FC = () => {
             background: "var(--gray-2)"
           }}
         >
+          <Tooltip content="Files are processed in alphabetical order. Prefix filenames with numbers (e.g. 1_main.py, 2_utils.py) to control the exact execution order.">
+            <Box style={{ position: "absolute", top: 8, right: 8, zIndex: 10 }}>
+              <QuestionMarkCircledIcon width="16" height="16" style={{ color: "var(--gray-9)" }} />
+            </Box>
+          </Tooltip>
           <input
             ref={inputRef}
             type="file"
@@ -409,7 +428,13 @@ const Pack: FC = () => {
             />
           </Box>
           <Box>
-            <Text as="div" size="2" mb="1" weight="bold">API Key</Text>
+            <Flex align="center" gap="2" mb="1">
+              <Text as="div" size="2" weight="bold">GEMINI API KEY</Text>
+              <Link size="1" href="https://aistudio.google.com/app/apikey" target="_blank">(Get Key)</Link>
+              <Tooltip content="AI analyzes your code to figure out what inputs it asks for, so it can run the program automatically for you without needing you to manually type anything.">
+                <InfoCircledIcon width="14" height="14" style={{ color: "var(--gray-9)" }} />
+              </Tooltip>
+            </Flex>
             <TextField.Root
               type="password"
               placeholder="Your API Key"
@@ -534,14 +559,27 @@ const Pack: FC = () => {
 const App: FC = () => (
   <Flex direction="column" align="center" justify="center" gap="6" p="6" style={{ minHeight: "100vh" }}>
     <AdminKey />
-    <Heading size="8" color="blue">
-      savecodex
-    </Heading>
+    <Flex direction="column" align="center" gap="2" mb="4" style={{ textAlign: "center", maxWidth: 600 }}>
+      <Heading size="8" color="blue">
+        savecodex
+      </Heading>
+      <Text color="gray" size="3">
+        savecodex reads all the files in the folder you select, generate input automatically using ai, types those inputs, takes screenshots, makes documents and downloads it in docx.
+      </Text>
+      <Text size="2" style={{ color: "var(--gray-10)", opacity: 0.6 }}>
+        (note: some labs require you to manually "save as" and save the doc in a seperate place before uploading)
+      </Text>
+    </Flex>
     <Pack />
 
-    <Text size="2" color="gray" mt="4">
-      Made by <a href="https://github.com/kartinul" target="_blank" rel="noopener noreferrer" style={{ color: "var(--blue-9)", textDecoration: "none" }}>kartinul</a> :D
-    </Text>
+    <Flex align="center" gap="2" style={{ marginTop: "auto" }}>
+      <Text size="2" color="gray">
+        Made by <a href="https://github.com/kartinul" target="_blank" rel="noopener noreferrer" style={{ color: "var(--blue-9)", textDecoration: "none" }}>kartinul</a> :D
+      </Text>
+      <a href="https://github.com/kartinul" target="_blank" rel="noopener noreferrer" style={{ color: "var(--gray-11)", display: "flex", alignItems: "center" }}>
+        <GitHubLogoIcon width="16" height="16" />
+      </a>
+    </Flex>
   </Flex>
 );
 
