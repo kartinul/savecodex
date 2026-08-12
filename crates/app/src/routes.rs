@@ -187,6 +187,7 @@ async fn pack(mut multipart: Multipart) -> impl IntoResponse {
         page_break,
         &opts,
         Some(ai_config),
+        15,
     ).await {
         Ok(_) => {
             let out_docx = output_path.with_extension("docx");

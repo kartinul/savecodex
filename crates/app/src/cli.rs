@@ -100,6 +100,10 @@ enum Commands {
         /// Add a page break after each file's output.
         #[arg(long)]
         page_break: bool,
+
+        /// Max files to process in parallel.
+        #[arg(short, long, default_value_t = 15, env = "SAVECODEX_JOBS")]
+        jobs: usize,
     },
 
     /// Read questions from a PDF/DOCX, write code via AI, run it, export to DOCX + PDF.
@@ -207,6 +211,7 @@ pub async fn run() -> Result<()> {
             hostname,
             cwd,
             page_break,
+            jobs,
         } => {
             let resolved_username = username.unwrap_or_else(|| {
                 std::env::var("USER")
@@ -277,7 +282,7 @@ pub async fn run() -> Result<()> {
                     println!("   ℹ️  Text: {}", text.replace('\n', "\\n"));
                 }
 
-                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), page_break, &opts, None).await?;
+                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), page_break, &opts, None, jobs).await?;
             }
         }
         Commands::Solve { input, output } => {

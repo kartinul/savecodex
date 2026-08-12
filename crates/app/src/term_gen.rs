@@ -15,6 +15,7 @@ pub enum WindowStyle {
     Linux,
 }
 
+#[derive(Clone)]
 pub struct TermGenOptions {
     pub font_size: f32,
     pub theme: String,
