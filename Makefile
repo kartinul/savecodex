@@ -1,19 +1,15 @@
 .PHONY: dev build serve clean install test
 
-# ── Install frontend deps ────────────────────────────────────────────────── #
 install:
 	cd frontend && bun install
 
-# ── Production build ────────────────────────────────────────────────────── #
 build: install
 	cd frontend && bun run build
 	cargo build --release
 
-# ── Run the HTTP server (builds everything first) ────────────────────────── #
 serve: build
 	./target/release/savecodex serve
 
-# ── Dev: Vite HMR + cargo-watch hot-restart ──────────────────────────────── #
 # Frontend:  http://localhost:5173  (proxies /api → :7878)
 # Backend:   http://localhost:7878
 dev: install
@@ -23,11 +19,9 @@ dev: install
 	  cargo watch -q -c -x 'run -- serve' & \
 	  wait
 
-# ── Clean artefacts ─────────────────────────────────────────────────────── #
 clean:
 	cargo clean
 	rm -rf frontend/dist frontend/node_modules
 
-# ── Test pack command ───────────────────────────────────────────────────── #
 test:
 	cargo run -- pack ./test --style macos --theme dark --page-break
