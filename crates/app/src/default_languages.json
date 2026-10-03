@@ -84,15 +84,9 @@
     ]
   },
   "java": {
-    "build": [
-      "javac",
-      "{file}"
-    ],
     "run": [
       "java",
-      "-cp",
-      "{dir}",
-      "{file_stem}"
+      "{file}"
     ]
   }
 }

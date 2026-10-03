@@ -19,8 +19,9 @@ pub async fn run_pack(
     opts: &crate::term_gen::TermGenOptions,
     ai_config: Option<crate::ai::AiConfig>,
     jobs: usize,
+    recursive: bool,
 ) -> Result<()> {
-    tracing::debug!("run_pack: folder={:?} output={:?} extensions={:?} jobs={}", folder, output, extensions, jobs);
+    tracing::debug!("run_pack: folder={:?} output={:?} extensions={:?} jobs={} recursive={}", folder, output, extensions, jobs, recursive);
     info!("Starting pack: {}", folder.display());
 
     let folder_name = folder
@@ -35,7 +36,13 @@ pub async fn run_pack(
         .unwrap_or_else(|| PathBuf::from(format!("{}_pack", folder_name)));
 
     let mut all_found_files = Vec::new();
-    let walker = WalkBuilder::new(folder).git_ignore(true).build();
+    let mut walker_builder = WalkBuilder::new(folder);
+    walker_builder.git_ignore(true);
+    if !recursive {
+        // Only the given folder itself — no subdirectories.
+        walker_builder.max_depth(Some(1));
+    }
+    let walker = walker_builder.build();
     for result in walker {
         if let Ok(entry) = result {
             if entry.path().is_file() {

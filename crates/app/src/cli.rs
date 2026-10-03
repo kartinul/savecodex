@@ -41,6 +41,10 @@ enum Commands {
         #[arg(help = "Files or folders to pack.", required = true)]
         folders: Vec<PathBuf>,
 
+        /// Recurse into subdirectories. Without this flag, only the given folder itself is packed.
+        #[arg(short, long)]
+        recursive: bool,
+
         /// Output file (without extension). Defaults to <folder_name>_pack.
         #[arg(short, long, env = "SAVECODEX_OUTPUT")]
         output: Option<PathBuf>,
@@ -197,6 +201,7 @@ pub async fn run() -> Result<()> {
         }
         Commands::Pack {
             folders,
+            recursive,
             output,
             ext,
             doc_title,
@@ -271,6 +276,7 @@ pub async fn run() -> Result<()> {
                 let resolved_doc_text = doc_text.as_ref().map(|t| t.replace("{}", folder_name));
 
                 println!("📦 Packing: {}", folder.display());
+                println!("   🔍 Recursive: {}", if recursive { "yes" } else { "no (folder only)" });
                 if let Some(ref out) = resolved_output {
                     println!("   📄 Output: {}", out.display());
                 }
@@ -282,7 +288,7 @@ pub async fn run() -> Result<()> {
                     println!("   ℹ️  Text: {}", text.replace('\n', "\\n"));
                 }
 
-                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), page_break, &opts, None, jobs).await?;
+                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), page_break, &opts, None, jobs, recursive).await?;
             }
         }
         Commands::Solve { input, output } => {
