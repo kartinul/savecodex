@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::timeout;
 use std::io::{Read, Write};
@@ -45,12 +45,53 @@ impl LangConfig {
     }
 }
 
-fn replace_vars(args: &[String], file: &Path) -> Vec<String> {
-    let file_str = file.to_string_lossy().to_string();
-    let dir_str = file.parent().unwrap_or(Path::new("")).to_string_lossy().to_string();
-    let dir_str = if dir_str.is_empty() { ".".to_string() } else { dir_str };
-    let stem_str = file.file_stem().unwrap_or_default().to_string_lossy().to_string();
-    
+/// Make a path absolute without resolving symlinks (lexical join with cwd).
+fn absolutize(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|c| c.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
+/// The directory commands are executed from: the requested working directory when it is a
+/// usable directory, otherwise the file's parent, otherwise the current directory.
+fn resolve_work_dir(file: &Path, work_dir: Option<&Path>) -> PathBuf {
+    let candidate = work_dir
+        .map(Path::to_path_buf)
+        .or_else(|| file.parent().map(Path::to_path_buf))
+        .unwrap_or_default();
+    let mut candidate = absolutize(&candidate);
+
+    // The pack target may itself be a file (e.g. `savecodex pack main.rs`) — fall back to its parent.
+    if !candidate.is_dir() {
+        if let Some(parent) = candidate.parent() {
+            if parent.is_dir() {
+                candidate = parent.to_path_buf();
+            }
+        }
+    }
+    if !candidate.is_dir() {
+        candidate = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    }
+    candidate
+}
+
+/// Substitute `{file}`, `{dir}` and `{file_stem}` in a command template.
+/// Paths are made relative to `work_dir`, since commands run from there.
+fn replace_vars(args: &[String], file: &Path, work_dir: &Path) -> Vec<String> {
+    let file_abs = absolutize(file);
+    let rel = file_abs.strip_prefix(work_dir).unwrap_or(&file_abs);
+
+    let file_str = rel.to_string_lossy().to_string();
+    let dir_str = match rel.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().to_string(),
+        _ => ".".to_string(),
+    };
+    let stem_str = rel.file_stem().unwrap_or_default().to_string_lossy().to_string();
+
     args.iter().map(|arg| {
         arg.replace("{file}", &file_str)
            .replace("{dir}", &dir_str)
@@ -88,8 +129,19 @@ pub fn load_configurations() -> Result<HashMap<String, LangConfig>> {
     Ok(configs)
 }
 
+/// Run a single file. Commands execute from the file's parent directory.
 pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, String)> {
-    tracing::debug!("run_file called for: {:?}", file);
+    run_file_in(file, input_text, None).await
+}
+
+/// Run a single file, executing all commands from `work_dir` (the packed folder).
+/// Falls back to the file's parent directory when `work_dir` is `None` or unusable.
+pub async fn run_file_in(
+    file: &Path,
+    input_text: Option<&str>,
+    work_dir: Option<&Path>,
+) -> Result<(String, String)> {
+    tracing::debug!("run_file_in called for: {:?} (work_dir: {:?})", file, work_dir);
     tracing::trace!("input_text provided: {:?}", input_text);
     
     let ext = file.extension().and_then(|s| s.to_str()).context("File has no extension")?;
@@ -97,13 +149,17 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
     let config = configs.get(ext).with_context(|| format!("No configuration for extension: {}", ext))?;
     tracing::debug!("Loaded config for extension {}: {:?}", ext, config);
     
-    if let Some(build_args) = &config.build {
-        let args = replace_vars(build_args, file);
+    let work_dir = resolve_work_dir(file, work_dir);
+    tracing::debug!("Executing from work_dir: {:?}", work_dir);
+    
+    let build_args = config.build.as_ref().map(|b| replace_vars(b, file, &work_dir));
+    if let Some(args) = &build_args {
         if args.is_empty() { bail!("Empty build command"); }
-        tracing::debug!("Running build command: {:?}", args);
+        tracing::debug!("Running build command in {:?}: {:?}", work_dir, args);
         
         let child = std::process::Command::new(&args[0])
             .args(&args[1..])
+            .current_dir(&work_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
@@ -117,9 +173,16 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
         }
     }
     
-    let run_args = replace_vars(&config.run, file);
+    let run_args = replace_vars(&config.run, file, &work_dir);
     if run_args.is_empty() { bail!("Empty run command"); }
-    tracing::debug!("Running execution command in PTY: {:?}", run_args);
+    let executed_cmd = match &build_args {
+        Some(build) => {
+            let build: Vec<&str> = build.iter().map(|a| a.strip_prefix("./").unwrap_or(a)).collect();
+            format!("{} && {}", build.join(" "), run_args.join(" "))
+        }
+        None => run_args.join(" "),
+    };
+    tracing::debug!("Running execution command in PTY (cwd {:?}): {:?}", work_dir, run_args);
     
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
@@ -136,9 +199,7 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
     
     let mut cmd = CommandBuilder::new(&run_args[0]);
     cmd.args(&run_args[1..]);
-    if let Ok(cwd) = std::env::current_dir() {
-        cmd.cwd(cwd);
-    }
+    cmd.cwd(&work_dir);
     
     let child = Arc::new(Mutex::new(pair.slave.spawn_command(cmd)?));
     let child_clone = Arc::clone(&child);
@@ -228,7 +289,6 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
             let _ = child.lock().unwrap().kill();
             drop(pair.master); // Close PTY — signals reader thread to flush and exit
             let partial = rx.recv().unwrap_or_default(); // Wait for reader thread to finish
-            let executed_cmd = run_args.join(" ");
             return Ok((executed_cmd, format!("{}\n\n[Timeout after 5 seconds]", partial)));
         }
     }
@@ -238,6 +298,5 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
     let out = rx.recv().unwrap_or_default();
     let out = out.replace("^D\x08\x08", "").replace("^D", "");
     
-    let executed_cmd = run_args.join(" ");
     Ok((executed_cmd, out))
 }

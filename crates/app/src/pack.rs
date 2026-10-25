@@ -145,7 +145,13 @@ async fn process_file(
     opts: &crate::term_gen::TermGenOptions,
     ai_config: Option<&crate::ai::AiConfig>,
 ) -> Result<crate::docx_gen::PackItem> {
-    let filename = path.strip_prefix(folder).unwrap_or(path).to_string_lossy().to_string();
+    // When the pack target is the file itself, strip_prefix yields "" — fall back to the file name.
+    let rel = path.strip_prefix(folder).unwrap_or(path);
+    let filename = if rel.as_os_str().is_empty() {
+        path.file_name().unwrap_or(rel.as_os_str()).to_string_lossy().to_string()
+    } else {
+        rel.to_string_lossy().to_string()
+    };
     info!("[{}/{}] Starting: {}", idx + 1, total, filename);
 
     let content = fs::read_to_string(path).context("Failed to read file")?;
@@ -162,10 +168,10 @@ async fn process_file(
         }
     };
 
-    tracing::debug!("[{}] Running via PTY", filename);
+    tracing::debug!("[{}] Running via PTY (cwd: {})", filename, folder.display());
     let t0 = std::time::Instant::now();
-    let run_result = crate::runner::run_file(path, if input_text.is_empty() { None } else { Some(&input_text) }).await;
-    let (_cmd, out) = match run_result {
+    let run_result = crate::runner::run_file_in(path, if input_text.is_empty() { None } else { Some(&input_text) }, Some(folder)).await;
+    let (cmd, out) = match run_result {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("[{}] Run failed: {}", filename, e);
@@ -196,7 +202,7 @@ async fn process_file(
     }
 
     let fake_prompt = if !opts.no_prompt_highlight {
-        format!("{}{}\n", opts.prompt, format!("run {}", filename))
+        format!("{}{}\n", opts.prompt, cmd)
     } else {
         String::new()
     };

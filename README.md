@@ -110,7 +110,7 @@ savecodex term -i test_input.txt -o test_term.png --style windows --title "Title
 
 - `-i, --input`: The file to read text from. If omitted, reads from `stdin`.
 - `-o, --output`: The path to save the generated PNG (default: `term.png`).
-- `--style`: The window control style. Options are `windows` (default), `macos`, or `linux`.
+- `--style`: The window control style. Options are `windows` (default), `macos`, or `ubuntu` (`linux` still works).
 - `--title`: The text to display in the window's title bar (default: `bash`).
 - `--theme`: The color theme of the window. Options are `dark` (default) or `light`.
 - `--font-size`: The font size in pixels (default: `18.0`).

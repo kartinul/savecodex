@@ -89,7 +89,7 @@ enum Commands {
         #[arg(long)]
         padding: Option<i32>,
 
-        /// Window style (windows, macos, linux).
+        /// Window style (windows, macos, ubuntu).
         #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows, env = "SAVECODEX_STYLE")]
         style: crate::term_gen::WindowStyle,
 
@@ -104,6 +104,10 @@ enum Commands {
         /// Print the PowerShell startup banner (windows style).
         #[arg(long)]
         banner: bool,
+
+        /// Minimum window width in columns (real terminals open at 80).
+        #[arg(long, default_value_t = 80)]
+        min_cols: u16,
 
         /// Realistic prompt username.
         #[arg(long)]
@@ -194,7 +198,7 @@ enum Commands {
         #[arg(long)]
         padding: Option<i32>,
 
-        /// Window style (windows, macos, linux).
+        /// Window style (windows, macos, ubuntu).
         #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows)]
         style: crate::term_gen::WindowStyle,
 
@@ -209,6 +213,10 @@ enum Commands {
         /// Print the PowerShell startup banner (windows style).
         #[arg(long)]
         banner: bool,
+
+        /// Minimum window width in columns (real terminals open at 80).
+        #[arg(long, default_value_t = 80)]
+        min_cols: u16,
 
         /// Realistic prompt username.
         #[arg(long)]
@@ -246,6 +254,7 @@ pub async fn run() -> Result<()> {
             messy,
             seed,
             banner,
+            min_cols,
             style,
             username,
             hostname,
@@ -289,6 +298,7 @@ pub async fn run() -> Result<()> {
                 messy,
                 seed,
                 banner,
+                min_cols,
                 style,
                 username: resolved_username,
                 hostname: resolved_hostname,
@@ -356,6 +366,7 @@ pub async fn run() -> Result<()> {
             messy,
             seed,
             banner,
+            min_cols,
             style,
             username,
             hostname,
@@ -411,6 +422,7 @@ pub async fn run() -> Result<()> {
                 messy,
                 seed,
                 banner,
+                min_cols,
                 style,
                 username: resolved_username,
                 hostname: resolved_hostname,

@@ -12,7 +12,8 @@ pub enum WindowStyle {
     #[default]
     Windows,
     Macos,
-    Linux,
+    #[value(alias = "linux")]
+    Ubuntu,
 }
 
 impl WindowStyle {
@@ -20,7 +21,7 @@ impl WindowStyle {
         match self {
             WindowStyle::Windows => 11,
             WindowStyle::Macos => 6,
-            WindowStyle::Linux => 2,
+            WindowStyle::Ubuntu => 2,
         }
     }
 }
@@ -39,6 +40,7 @@ pub struct TermGenOptions {
     pub messy: u8,
     pub seed: Option<u64>,
     pub banner: bool,
+    pub min_cols: u16,
 }
 
 impl Default for TermGenOptions {
@@ -56,6 +58,7 @@ impl Default for TermGenOptions {
             messy: 0,
             seed: None,
             banner: false,
+            min_cols: 80,
         }
     }
 }
@@ -308,7 +311,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
     let (bg, default_fg) = match (style, light) {
         (WindowStyle::Windows, false) => (Rgb(12, 12, 12), Rgb(204, 204, 204)),
         (WindowStyle::Macos, false) => (Rgb(30, 30, 30), Rgb(255, 255, 255)),
-        (WindowStyle::Linux, false) => (Rgb(48, 10, 36), Rgb(255, 255, 255)),
+        (WindowStyle::Ubuntu, false) => (Rgb(48, 10, 36), Rgb(255, 255, 255)),
         (_, true) => (Rgb(255, 255, 255), Rgb(0, 0, 0)),
     };
 
@@ -318,7 +321,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
             include_bytes!("../assets/CascadiaMono-Bold.ttf"),
             include_bytes!("../assets/Selawik.ttf"),
         ),
-        WindowStyle::Linux => (
+        WindowStyle::Ubuntu => (
             include_bytes!("../assets/UbuntuMono-Regular.ttf"),
             include_bytes!("../assets/UbuntuMono-Bold.ttf"),
             include_bytes!("../assets/Ubuntu-Bold.ttf"),
@@ -339,7 +342,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
     let (base_font, base_title_h, spacing) = match style {
         WindowStyle::Windows => (18.0, 40.0, 1.0),
         WindowStyle::Macos => (16.0, 29.0, 1.0),
-        WindowStyle::Linux => (11.0, 18.0, 1.2),
+        WindowStyle::Ubuntu => (11.0, 18.0, 1.2),
     };
     let u = opts.font_size / base_font;
     let title_bar_h = (base_title_h * u).round() as i32;
@@ -359,12 +362,12 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
             }
         }
         WindowStyle::Macos => opts.cwd.trim_end_matches('/').rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("/").to_string(),
-        WindowStyle::Linux => opts.cwd.clone(),
+        WindowStyle::Ubuntu => opts.cwd.clone(),
     };
     let prompt_ansi = match style {
         WindowStyle::Macos => format!("{}@{} {} % ", opts.username, opts.hostname, cwd),
         WindowStyle::Windows => format!("PS {}> ", cwd),
-        WindowStyle::Linux => format!("\x1b[01;32m{}@{}\x1b[00m:\x1b[01;34m{}\x1b[00m$ ", opts.username, opts.hostname, cwd),
+        WindowStyle::Ubuntu => format!("\x1b[01;32m{}@{}\x1b[00m:\x1b[01;34m{}\x1b[00m$ ", opts.username, opts.hostname, cwd),
     };
 
     let mut lines: Vec<Vec<Run>> = Vec::new();
@@ -383,18 +386,18 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         .map(|runs| runs.iter().map(|r| text_width(if r.bold { &font_bold } else { &font_regular }, scale, &r.text)).sum::<i32>())
         .max()
         .unwrap_or(0);
-    let mut content_w = max_line_w.max(cell_w as i32 * 20);
+    let mut content_w = max_line_w.max((cell_w * opts.min_cols as f32).ceil() as i32);
 
     let title_scale = PxScale::from(match style {
         WindowStyle::Windows => 15.0 * u,
         WindowStyle::Macos => 17.0 * u,
-        WindowStyle::Linux => 10.0 * u,
+        WindowStyle::Ubuntu => 10.0 * u,
     });
     let title = match style {
         WindowStyle::Windows => "Windows PowerShell".to_string(),
-        WindowStyle::Linux => format!("{}@{}: {}", opts.username, opts.hostname, cwd),
+        WindowStyle::Ubuntu => format!("{}@{}: {}", opts.username, opts.hostname, cwd),
         WindowStyle::Macos => {
-            let cols = ((content_w + opts.padding * 2) as f32 / cell_w) as usize;
+            let cols = (content_w as f32 / cell_w).round() as usize;
             let rows = ((lines.len() as i32 * line_h as i32 + opts.padding * 2) as f32 / line_h) as usize;
             format!("{} — -zsh — {}×{}", opts.username, cols, rows)
         }
@@ -403,7 +406,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
     let chrome_min_w = match style {
         WindowStyle::Windows => 480.0 * u,
         WindowStyle::Macos => title_w + 180.0 * u,
-        WindowStyle::Linux => title_w + 60.0 * u,
+        WindowStyle::Ubuntu => title_w + 60.0 * u,
     };
     let padding = opts.padding;
     let gutter = if style == WindowStyle::Macos { (16.0 * u).round() as i32 } else { 0 };
@@ -510,7 +513,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
 
             round_corners(&mut img, 8.0 * u, true, rgba(if light { Rgb(190, 190, 190) } else { Rgb(85, 85, 85) }));
         }
-        WindowStyle::Linux => {
+        WindowStyle::Ubuntu => {
             let (top, bottom) = ((87.0, 87.0, 79.0), (64.0, 63.0, 60.0));
             for y in 0..title_bar_h {
                 let t = y as f32 / th;
@@ -565,7 +568,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
     match style {
         WindowStyle::Windows => fill_rect(&mut img, cx, cy, u.round(), line_h, rgba(if light { Rgb(0, 0, 0) } else { Rgb(248, 248, 248) })),
         WindowStyle::Macos => fill_rect(&mut img, cx, cy, cell_w, line_h, rgba(if light { Rgb(127, 127, 127) } else { Rgb(161, 161, 161) })),
-        WindowStyle::Linux => fill_rect(&mut img, cx, cy, cell_w, line_h, rgba(default_fg)),
+        WindowStyle::Ubuntu => fill_rect(&mut img, cx, cy, cell_w, line_h, rgba(default_fg)),
     }
 
     let Some(chrome) = chrome else { return Ok(img) };

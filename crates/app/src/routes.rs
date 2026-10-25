@@ -33,10 +33,8 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
         }
     };
 
-    let mut ext = String::new();
     let mut doc_title = String::new();
     let mut doc_text = String::new();
-    let mut font_size: f32 = 18.0;
     let mut theme = "dark".to_string();
     let mut prompt = "$ ".to_string();
     let mut no_prompt_highlight = false;
@@ -90,10 +88,8 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
             // It's a parameter.
             let text = field.text().await.unwrap_or_default();
             match field_name.as_str() {
-                "ext" => ext = text,
                 "doc_title" => doc_title = text,
                 "doc_text" => doc_text = text,
-                "font_size" => font_size = text.parse().unwrap_or(18.0),
                 "theme" => theme = text,
                 "prompt" => prompt = text,
                 "no_prompt_highlight" => no_prompt_highlight = text == "true",
@@ -101,7 +97,7 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
                 "style" => {
                     style = match text.as_str() {
                         "macos" => crate::term_gen::WindowStyle::Macos,
-                        "linux" => crate::term_gen::WindowStyle::Linux,
+                        "ubuntu" | "linux" => crate::term_gen::WindowStyle::Ubuntu,
                         _ => crate::term_gen::WindowStyle::Windows,
                     };
                 }
@@ -149,7 +145,7 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
     let resolved_cwd = cwd.replace("{}", &folder_name);
 
     let opts = crate::term_gen::TermGenOptions {
-        font_size,
+        font_size: 18.0,
         theme,
         prompt,
         no_prompt_highlight,
@@ -157,16 +153,11 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
         messy: 0,
         seed: None,
         banner: false,
+        min_cols: 80,
         style,
         username,
         hostname,
         cwd: resolved_cwd,
-    };
-
-    let ext_list: Vec<String> = if ext.is_empty() {
-        Vec::new()
-    } else {
-        ext.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
     };
 
     let resolved_doc_title = doc_title.replace("{}", &folder_name);
@@ -188,7 +179,7 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
     match crate::pack::run_pack(
         pack_folder,
         Some(&output_path),
-        &ext_list,
+        &[],
         doc_title_opt,
         doc_text_opt,
         page_break,

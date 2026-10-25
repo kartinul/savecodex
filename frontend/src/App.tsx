@@ -182,10 +182,8 @@ const Pack: FC = () => {
   const [docTextFocused, setDocTextFocused] = useState(false);
   const [cwdFocused, setCwdFocused] = useState(false);
 
-  const [ext, setExt] = useLocalStorage("savecodex_ext", "");
   const [docTitle, setDocTitle] = useLocalStorage("savecodex_doc_title", "");
   const [docText, setDocText] = useLocalStorage("savecodex_doc_text", "DOCX of: {}");
-  const [fontSize, setFontSize] = useLocalStorage("savecodex_font_size", "18");
   const [theme, setTheme] = useLocalStorage("savecodex_theme", "dark");
   const [noPromptHighlight, setNoPromptHighlight] = useLocalStorage("savecodex_no_prompt", false);
   const [style, setStyle] = useLocalStorage("savecodex_style", "windows");
@@ -201,10 +199,8 @@ const Pack: FC = () => {
   const [aiBaseUrl, setAiBaseUrl] = useLocalStorage("savecodex_ai_base_url", "");
 
   const resetAdvanced = () => {
-    setExt("");
     setDocTitle("{}");
     setDocText("DOCX of: {}");
-    setFontSize("18");
     setTheme("dark");
     setNoPromptHighlight(false);
     setStyle("windows");
@@ -282,10 +278,8 @@ const Pack: FC = () => {
       form.append(f.webkitRelativePath || f.name, f);
     }
 
-    form.append("ext", ext);
     form.append("doc_title", docTitle || folderName);
     form.append("doc_text", docText);
-    form.append("font_size", fontSize);
     form.append("theme", theme);
     form.append("no_prompt_highlight", String(noPromptHighlight));
     form.append("style", style);
@@ -465,10 +459,6 @@ const Pack: FC = () => {
               <Button size="1" variant="soft" color="gray" onClick={resetAdvanced} type="button">Reset Defaults</Button>
             </Flex>
             <Grid columns="2" gap="3">
-              <Box>
-                <Text as="div" size="2" mb="1">Extensions Override (CSV)</Text>
-                <TextField.Root value={ext} onChange={e => setExt(e.target.value)} />
-              </Box>
               {!noKey && <>
               <Box>
                 <Text as="div" size="2" mb="1">AI Provider</Text>
@@ -500,11 +490,6 @@ const Pack: FC = () => {
               )}
               </>}
               <Box>
-                <Text as="div" size="2" mb="1">Font Size</Text>
-                <TextField.Root type="number" value={fontSize} onChange={e => setFontSize(e.target.value)} />
-              </Box>
-
-              <Box>
                 <Text as="div" size="2" mb="1">Theme</Text>
                 <Select.Root value={theme} onValueChange={setTheme}>
                   <Select.Trigger style={{ width: "100%" }} />
@@ -521,7 +506,7 @@ const Pack: FC = () => {
                   <Select.Content>
                     <Select.Item value="windows">Windows</Select.Item>
                     <Select.Item value="macos">macOS</Select.Item>
-                    <Select.Item value="linux">Linux</Select.Item>
+                    <Select.Item value="ubuntu">Ubuntu</Select.Item>
                   </Select.Content>
                 </Select.Root>
               </Box>
