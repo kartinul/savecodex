@@ -2,24 +2,28 @@
 
 use std::path::Path;
 use axum::{
-    extract::Multipart,
+    extract::{Multipart, State},
     http::{header, StatusCode},
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::json;
 
-pub fn api_router() -> Router {
+pub fn api_router(no_key: bool) -> Router {
     Router::new()
         .route("/pack", post(pack))
         .route("/verify_admin", post(verify_admin))
+        .route("/config", get(config))
+        .with_state(no_key)
 }
 
-
+async fn config(State(no_key): State<bool>) -> impl IntoResponse {
+    Json(json!({ "no_key": no_key }))
+}
 
 /// POST /api/pack — multipart upload of source files (field name = relative path).
-async fn pack(mut multipart: Multipart) -> impl IntoResponse {
+async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl IntoResponse {
     tracing::debug!("Received /api/pack request, starting multipart parsing");
     let temp_dir = match tempfile::tempdir() {
         Ok(dir) => dir,
@@ -131,12 +135,12 @@ async fn pack(mut multipart: Multipart) -> impl IntoResponse {
     let model = if ai_model.is_empty() { "gemini-1.5-pro".to_string() } else { ai_model };
     let base_url = if ai_base_url.is_empty() { None } else { Some(ai_base_url) };
 
-    let ai_config = crate::ai::AiConfig {
+    let ai_config = (!no_key).then(|| crate::ai::AiConfig {
         provider,
         model,
         base_url,
         api_key: final_api_key,
-    };
+    });
 
     if !got_files {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "no files uploaded" }))).into_response();
@@ -189,7 +193,7 @@ async fn pack(mut multipart: Multipart) -> impl IntoResponse {
         doc_text_opt,
         page_break,
         &opts,
-        Some(ai_config),
+        ai_config,
         15,
         true,
     ).await {
