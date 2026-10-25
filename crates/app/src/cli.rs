@@ -81,13 +81,25 @@ enum Commands {
         #[arg(long)]
         no_prompt_highlight: bool,
 
-        /// Padding around text.
-        #[arg(long, default_value_t = 28)]
-        padding: i32,
+        /// Padding around text (default: what the real terminal uses).
+        #[arg(long)]
+        padding: Option<i32>,
 
         /// Window style (windows, macos, linux).
         #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows, env = "SAVECODEX_STYLE")]
         style: crate::term_gen::WindowStyle,
+
+        /// Realistic imperfections: 0 (off) to 3 (very messy).
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+        messy: u8,
+
+        /// Seed for --messy (default: derived from the output text).
+        #[arg(long)]
+        seed: Option<u64>,
+
+        /// Print the PowerShell startup banner (windows style).
+        #[arg(long)]
+        banner: bool,
 
         /// Realistic prompt username.
         #[arg(long)]
@@ -152,6 +164,10 @@ enum Commands {
         #[arg(short, long, default_value = "term.png")]
         output: PathBuf,
 
+        /// Open the generated image after writing it.
+        #[arg(long)]
+        show: bool,
+
 
 
         /// Font size in pixels.
@@ -170,13 +186,25 @@ enum Commands {
         #[arg(long)]
         no_prompt_highlight: bool,
 
-        /// Padding around text.
-        #[arg(long, default_value_t = 28)]
-        padding: i32,
+        /// Padding around text (default: what the real terminal uses).
+        #[arg(long)]
+        padding: Option<i32>,
 
         /// Window style (windows, macos, linux).
         #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows)]
         style: crate::term_gen::WindowStyle,
+
+        /// Realistic imperfections: 0 (off) to 3 (very messy).
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+        messy: u8,
+
+        /// Seed for --messy (default: derived from the output text).
+        #[arg(long)]
+        seed: Option<u64>,
+
+        /// Print the PowerShell startup banner (windows style).
+        #[arg(long)]
+        banner: bool,
 
         /// Realistic prompt username.
         #[arg(long)]
@@ -211,6 +239,9 @@ pub async fn run() -> Result<()> {
             prompt,
             no_prompt_highlight,
             padding,
+            messy,
+            seed,
+            banner,
             style,
             username,
             hostname,
@@ -250,7 +281,10 @@ pub async fn run() -> Result<()> {
                 theme,
                 prompt,
                 no_prompt_highlight,
-                padding,
+                padding: padding.unwrap_or(style.padding()),
+                messy,
+                seed,
+                banner,
                 style,
                 username: resolved_username,
                 hostname: resolved_hostname,
@@ -309,11 +343,15 @@ pub async fn run() -> Result<()> {
             input,
             text_file,
             output,
+            show,
             font_size,
             theme,
             prompt,
             no_prompt_highlight,
             padding,
+            messy,
+            seed,
+            banner,
             style,
             username,
             hostname,
@@ -365,7 +403,10 @@ pub async fn run() -> Result<()> {
                 theme,
                 prompt,
                 no_prompt_highlight,
-                padding,
+                padding: padding.unwrap_or(style.padding()),
+                messy,
+                seed,
+                banner,
                 style,
                 username: resolved_username,
                 hostname: resolved_hostname,
@@ -375,6 +416,10 @@ pub async fn run() -> Result<()> {
             let img = crate::term_gen::generate_terminal_image(&raw, &opts)?;
             img.save(&output)?;
             println!("wrote {} ({}x{})", output.display(), img.width(), img.height());
+            if show {
+                let opener = if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "explorer" } else { "xdg-open" };
+                std::process::Command::new(opener).arg(&output).spawn()?;
+            }
         }
     }
 
