@@ -22,6 +22,14 @@ function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => voi
   return [storedValue, setValue];
 }
 
+const noKeyPromise = fetch("/api/config").then(r => r.json()).then(d => !!d.no_key).catch(() => false);
+
+function useNoKey() {
+  const [noKey, setNoKey] = useState(false);
+  useEffect(() => { noKeyPromise.then(setNoKey); }, []);
+  return noKey;
+}
+
 const SUPPORTED_EXTENSIONS = ["java", "py", "rs", "js", "ts", "c", "cpp", "h", "hpp", "go", "rb", "php", "cs", "swift", "kt", "scala", "sh", "tsx", "jsx", "html", "css"];
 
 const AdminKey: FC = () => {
@@ -185,6 +193,7 @@ const Pack: FC = () => {
   const [hostname, setHostname] = useLocalStorage("savecodex_hostname", "desktop");
   const [cwd, setCwd] = useLocalStorage("savecodex_cwd", "{}");
   const [pageBreak, setPageBreak] = useLocalStorage("savecodex_page_break", false);
+  const noKey = useNoKey();
   const [geminiApiKey, setGeminiApiKey] = useLocalStorage("savecodex_gemini_key", "");
 
   const [aiProvider, setAiProvider] = useLocalStorage("savecodex_ai_provider", "gemini");
@@ -417,6 +426,7 @@ const Pack: FC = () => {
               onBlur={() => setDocTitleFocused(false)}
             />
           </Box>
+          {!noKey && (
           <Box>
             <Flex align="center" gap="2" mb="1">
               <Text as="div" size="2" weight="bold">GEMINI API KEY</Text>
@@ -432,6 +442,7 @@ const Pack: FC = () => {
               onChange={e => setGeminiApiKey(e.target.value)}
             />
           </Box>
+          )}
           <Box>
             <Text as="div" size="2" mb="1" weight="bold">Document Text</Text>
             <TextField.Root
@@ -458,6 +469,7 @@ const Pack: FC = () => {
                 <Text as="div" size="2" mb="1">Extensions Override (CSV)</Text>
                 <TextField.Root value={ext} onChange={e => setExt(e.target.value)} />
               </Box>
+              {!noKey && <>
               <Box>
                 <Text as="div" size="2" mb="1">AI Provider</Text>
                 <Select.Root value={aiProvider} onValueChange={setAiProvider}>
@@ -486,6 +498,7 @@ const Pack: FC = () => {
                   />
                 </Box>
               )}
+              </>}
               <Box>
                 <Text as="div" size="2" mb="1">Font Size</Text>
                 <TextField.Root type="number" value={fontSize} onChange={e => setFontSize(e.target.value)} />
@@ -546,9 +559,11 @@ const Pack: FC = () => {
   );
 };
 
-const App: FC = () => (
+const App: FC = () => {
+  const noKey = useNoKey();
+  return (
   <Flex direction="column" align="center" justify="center" gap="6" p="6" style={{ minHeight: "100vh" }}>
-    <AdminKey />
+    {!noKey && <AdminKey />}
     <Flex direction="column" align="center" gap="2" mb="4" style={{ textAlign: "center", maxWidth: 600 }}>
       <Heading size="8" color="blue">
         savecodex
@@ -571,6 +586,7 @@ const App: FC = () => (
       </a>
     </Flex>
   </Flex>
-);
+  );
+};
 
 export default App;

@@ -15,14 +15,19 @@ use tower_http::{
 use crate::{embed::Frontend, routes};
 
 /// Start the axum server on `host:port`.
-pub async fn start(host: &str, port: u16) -> Result<()> {
+pub async fn start(host: &str, port: u16, no_key: bool) -> Result<()> {
+    if no_key {
+        crate::ai::AiConfig::from_env("INPUT")?;
+        tracing::info!("No-key mode: using server env AI config");
+    }
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE]);
 
     let app = Router::new()
-        .nest("/api", routes::api_router())
+        .nest("/api", routes::api_router(no_key))
         .fallback(spa_handler)
         .layer(cors)
         .layer(CompressionLayer::new())

@@ -33,6 +33,10 @@ enum Commands {
         /// Enable debug logging.
         #[arg(long)]
         debug: bool,
+
+        /// Use the server's env AI config; users need no API key or admin password.
+        #[arg(long, env = "SAVECODEX_NO_KEY")]
+        no_key: bool,
     },
 
     /// Run code files in a folder and package them with output into DOCX + PDF.
@@ -196,8 +200,8 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { host, port, debug: _ } => {
-            server::start(&host, port).await?;
+        Commands::Serve { host, port, debug: _, no_key } => {
+            server::start(&host, port, no_key).await?;
         }
         Commands::Pack {
             folders,
