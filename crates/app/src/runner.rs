@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::timeout;
 use std::io::{Read, Write};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use directories::ProjectDirs;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -129,6 +129,56 @@ pub fn load_configurations() -> Result<HashMap<String, LangConfig>> {
     Ok(configs)
 }
 
+fn bwrap_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let ok = cfg!(target_os = "linux")
+            && std::process::Command::new("bwrap").arg("--version").output().is_ok_and(|o| o.status.success());
+        if !ok { tracing::warn!("bwrap not available, running code unsandboxed"); }
+        ok
+    })
+}
+
+fn rustup_home() -> Option<String> {
+    std::env::var("RUSTUP_HOME").ok()
+        .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.rustup")))
+        .filter(|p| Path::new(p).is_dir())
+}
+
+/// Wrap a command in bwrap: read-only system dirs, no home dir, private /tmp, pid namespace and rlimits.
+fn sandboxed(args: &[String], work_dir: &Path) -> Vec<String> {
+    if !bwrap_available() { return args.to_vec(); }
+    let dir = work_dir.to_string_lossy().to_string();
+    let mut argv: Vec<String> = [
+        "bwrap", "--unshare-all", "--share-net", "--die-with-parent", "--new-session",
+        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+    ].map(String::from).to_vec();
+    for sys_dir in ["/usr", "/bin", "/lib", "/lib64", "/etc", "/run/systemd/resolve"] {
+        argv.extend(["--ro-bind-try", sys_dir, sys_dir].map(String::from));
+    }
+    if let Some(rustup) = rustup_home() {
+        argv.extend(["--ro-bind".into(), rustup.clone(), rustup]);
+    }
+    argv.extend(["--bind", &dir, &dir, "--chdir", &dir].map(String::from));
+    argv.extend(["prlimit", "--nproc=128", "--cpu=10", "--fsize=64000000", "--as=8000000000", "--"].map(String::from));
+    argv.extend_from_slice(args);
+    argv
+}
+
+/// Allowlisted env for child processes, so server secrets never reach user code.
+fn sandbox_env() -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = ["PATH", "LANG", "TERM", "JAVA_HOME", "RUSTUP_HOME", "CARGO_HOME", "HOME"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok().map(|val| (key.to_string(), val)))
+        .collect();
+    if bwrap_available() {
+        env.retain(|(key, _)| key != "HOME" && key != "RUSTUP_HOME");
+        env.push(("HOME".into(), "/tmp".into()));
+        if let Some(rustup) = rustup_home() { env.push(("RUSTUP_HOME".into(), rustup)); }
+    }
+    env
+}
+
 /// Run a single file. Commands execute from the file's parent directory.
 pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, String)> {
     run_file_in(file, input_text, None).await
@@ -157,14 +207,18 @@ pub async fn run_file_in(
         if args.is_empty() { bail!("Empty build command"); }
         tracing::debug!("Running build command in {:?}: {:?}", work_dir, args);
         
-        let child = std::process::Command::new(&args[0])
-            .args(&args[1..])
+        let argv = sandboxed(args, &work_dir);
+        let mut build = tokio::process::Command::new(&argv[0]);
+        build.args(&argv[1..])
             .current_dir(&work_dir)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-            
-        let output = child.wait_with_output()?;
+            .env_clear()
+            .envs(sandbox_env())
+            .kill_on_drop(true);
+
+        let output = match timeout(Duration::from_secs(30), build.output()).await {
+            Ok(output) => output?,
+            Err(_) => return Ok((args.join(" "), "[Build timeout after 30 seconds]".into())),
+        };
         if !output.status.success() {
             let mut err_out = String::from_utf8_lossy(&output.stdout).to_string();
             err_out.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -197,9 +251,12 @@ pub async fn run_file_in(
     let (tx, rx) = mpsc::channel();
     let (idle_tx, idle_rx) = mpsc::channel();
     
-    let mut cmd = CommandBuilder::new(&run_args[0]);
-    cmd.args(&run_args[1..]);
+    let run_argv = sandboxed(&run_args, &work_dir);
+    let mut cmd = CommandBuilder::new(&run_argv[0]);
+    cmd.args(&run_argv[1..]);
     cmd.cwd(&work_dir);
+    cmd.env_clear();
+    for (key, val) in sandbox_env() { cmd.env(key, val); }
     
     let child = Arc::new(Mutex::new(pair.slave.spawn_command(cmd)?));
     let child_clone = Arc::clone(&child);

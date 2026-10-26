@@ -1,6 +1,6 @@
 //! API routes — `/api/pack`.
 
-use std::path::Path;
+use std::path::{Component, Path};
 use axum::{
     extract::{Multipart, State},
     http::{header, StatusCode},
@@ -69,6 +69,9 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
 
             // Use field_name which has the full relative path like folder/src/main.rs
             let path = Path::new(&field_name);
+            if !path.components().all(|c| matches!(c, Component::Normal(_))) {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad file path" }))).into_response();
+            }
             if let Some(first_comp) = path.components().next() {
                 let fname = first_comp.as_os_str().to_string_lossy().to_string();
                 if folder_name == "folder" {
