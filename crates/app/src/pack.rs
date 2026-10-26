@@ -190,7 +190,7 @@ async fn process_file(
     let mut safe_out = String::new();
     for line in lines {
         if line.len() > max_line_len {
-            safe_out.push_str(&line[..max_line_len]);
+            safe_out.push_str(&line[..line.floor_char_boundary(max_line_len)]);
             safe_out.push_str("... [line truncated]\n");
         } else {
             safe_out.push_str(line);
