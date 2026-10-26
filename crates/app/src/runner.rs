@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use std::io::{Read, Write};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU32, Ordering};
 use directories::ProjectDirs;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -133,7 +134,10 @@ fn bwrap_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         let ok = cfg!(target_os = "linux")
-            && std::process::Command::new("bwrap").arg("--version").output().is_ok_and(|o| o.status.success());
+            && std::process::Command::new("bwrap")
+                .args(["--unshare-all", "--share-net", "--ro-bind", "/", "/", "true"])
+                .output()
+                .is_ok_and(|o| o.status.success());
         if !ok { tracing::warn!("bwrap not available, running code unsandboxed"); }
         ok
     })
@@ -145,9 +149,65 @@ fn rustup_home() -> Option<String> {
         .filter(|p| Path::new(p).is_dir())
 }
 
-/// Wrap a command in bwrap: read-only system dirs, no home dir, private /tmp, pid namespace and rlimits.
+#[cfg(unix)]
+fn is_root() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self").is_ok_and(|m| m.uid() == 0)
+}
+
+#[cfg(not(unix))]
+fn is_root() -> bool { false }
+
+/// Owner of the job dir when the server runs as root; user code then runs as that uid.
+#[cfg(unix)]
+fn job_uid(work_dir: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    if !is_root() { return None; }
+    std::fs::metadata(work_dir).ok().map(|m| m.uid()).filter(|&uid| uid != 0)
+}
+
+#[cfg(not(unix))]
+fn job_uid(_: &Path) -> Option<u32> { None }
+
+/// When running as root, give `dir` (recursively) to a fresh unused uid with mode 0700,
+/// so concurrent jobs can't read each other's files or the server's /proc/*/environ.
+#[cfg(unix)]
+pub fn isolate_job_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    static NEXT_UID: AtomicU32 = AtomicU32::new(100_000);
+    if !is_root() { return Ok(()); }
+    let uid = NEXT_UID.fetch_add(1, Ordering::Relaxed);
+    fn chown_all(path: &Path, uid: u32) -> std::io::Result<()> {
+        std::os::unix::fs::lchown(path, Some(uid), Some(uid))?;
+        if path.is_dir() && !path.is_symlink() {
+            for entry in std::fs::read_dir(path)? { chown_all(&entry?.path(), uid)?; }
+        }
+        Ok(())
+    }
+    chown_all(dir, uid)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn isolate_job_dir(_: &Path) -> Result<()> { Ok(()) }
+
+/// Linux only: drop to the job uid (setpriv), then bwrap if usable, then rlimits.
 fn sandboxed(args: &[String], work_dir: &Path) -> Vec<String> {
-    if !bwrap_available() { return args.to_vec(); }
+    if !cfg!(target_os = "linux") { return args.to_vec(); }
+    let mut argv = Vec::new();
+    if let Some(uid) = job_uid(work_dir) {
+        let id = uid.to_string();
+        argv.extend(["setpriv", "--reuid", &id, "--regid", &id, "--clear-groups", "--no-new-privs"].map(String::from));
+    }
+    if bwrap_available() { argv.extend(bwrap_args(work_dir)); }
+    argv.extend(["prlimit", "--nproc=128", "--cpu=10", "--fsize=64000000", "--as=8000000000", "--"].map(String::from));
+    argv.extend_from_slice(args);
+    argv
+}
+
+/// Read-only system dirs, no home dir, private /tmp and pid namespace.
+fn bwrap_args(work_dir: &Path) -> Vec<String> {
     let dir = work_dir.to_string_lossy().to_string();
     let mut argv: Vec<String> = [
         "bwrap", "--unshare-all", "--share-net", "--die-with-parent", "--new-session",
@@ -160,13 +220,11 @@ fn sandboxed(args: &[String], work_dir: &Path) -> Vec<String> {
         argv.extend(["--ro-bind".into(), rustup.clone(), rustup]);
     }
     argv.extend(["--bind", &dir, &dir, "--chdir", &dir].map(String::from));
-    argv.extend(["prlimit", "--nproc=128", "--cpu=10", "--fsize=64000000", "--as=8000000000", "--"].map(String::from));
-    argv.extend_from_slice(args);
     argv
 }
 
 /// Allowlisted env for child processes, so server secrets never reach user code.
-fn sandbox_env() -> Vec<(String, String)> {
+fn sandbox_env(work_dir: &Path) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = ["PATH", "LANG", "TERM", "JAVA_HOME", "RUSTUP_HOME", "CARGO_HOME", "HOME"]
         .into_iter()
         .filter_map(|key| std::env::var(key).ok().map(|val| (key.to_string(), val)))
@@ -175,6 +233,10 @@ fn sandbox_env() -> Vec<(String, String)> {
         env.retain(|(key, _)| key != "HOME" && key != "RUSTUP_HOME");
         env.push(("HOME".into(), "/tmp".into()));
         if let Some(rustup) = rustup_home() { env.push(("RUSTUP_HOME".into(), rustup)); }
+    } else if job_uid(work_dir).is_some() {
+        // shared /tmp as HOME would let one job plant ~/.local python packages for another
+        env.retain(|(key, _)| key != "HOME");
+        env.push(("HOME".into(), work_dir.to_string_lossy().into()));
     }
     env
 }
@@ -212,7 +274,7 @@ pub async fn run_file_in(
         build.args(&argv[1..])
             .current_dir(&work_dir)
             .env_clear()
-            .envs(sandbox_env())
+            .envs(sandbox_env(&work_dir))
             .kill_on_drop(true);
 
         let output = match timeout(Duration::from_secs(30), build.output()).await {
@@ -256,7 +318,7 @@ pub async fn run_file_in(
     cmd.args(&run_argv[1..]);
     cmd.cwd(&work_dir);
     cmd.env_clear();
-    for (key, val) in sandbox_env() { cmd.env(key, val); }
+    for (key, val) in sandbox_env(&work_dir) { cmd.env(key, val); }
     
     let child = Arc::new(Mutex::new(pair.slave.spawn_command(cmd)?));
     let child_clone = Arc::clone(&child);

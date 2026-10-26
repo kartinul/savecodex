@@ -178,6 +178,11 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
 
     let output_path = temp_dir.path().join(format!("{}_pack", folder_name));
 
+    if let Err(e) = crate::runner::isolate_job_dir(temp_dir.path()) {
+        tracing::error!("Failed to isolate job dir: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "job isolation failure" }))).into_response();
+    }
+
     tracing::info!("Running pack on {}", pack_folder.display());
     match crate::pack::run_pack(
         pack_folder,
