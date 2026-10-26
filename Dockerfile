@@ -23,16 +23,6 @@ WORKDIR /app
 # Install common languages for savecodex to run, plus libssl3 for the dynamically-linked binary
 RUN apt-get update && apt-get install -y \
     python3 \
-    nodejs \
-    gcc \
-    g++ \
-    clang \
-    make \
-    curl \
-    default-jdk \
-    golang \
-    php-cli \
-    ruby \
     libssl3 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
