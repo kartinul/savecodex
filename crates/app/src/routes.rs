@@ -44,6 +44,8 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
     let mut hostname = "host".to_string();
     let mut cwd = "~".to_string();
     let mut page_break = false;
+    let mut ai_input = crate::pack::AiInput::Auto;
+    let mut trim = true;
     let mut folder_name = "folder".to_string();
     let mut got_files = false;
 
@@ -108,6 +110,14 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
                 "hostname" => hostname = text,
                 "cwd" => cwd = text,
                 "page_break" => page_break = text == "true",
+                "trim" => trim = text != "false",
+                "ai_input" => {
+                    ai_input = match text.as_str() {
+                        "always" => crate::pack::AiInput::Always,
+                        "never" => crate::pack::AiInput::Never,
+                        _ => crate::pack::AiInput::Auto,
+                    }
+                }
                 "gemini_api_key" => gemini_api_key = text,
                 "admin_password" => admin_password = text,
                 "ai_provider" => ai_provider = text,
@@ -195,6 +205,8 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
         ai_config,
         15,
         true,
+        ai_input,
+        trim,
     ).await {
         Ok(_) => {
             let out_docx = output_path.with_extension("docx");

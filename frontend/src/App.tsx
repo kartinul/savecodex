@@ -192,6 +192,8 @@ const Pack: FC = () => {
   const [cwd, setCwd] = useLocalStorage("savecodex_cwd", "{}");
   const [filename, setFilename] = useLocalStorage("savecodex_filename", "{}_pack");
   const [pageBreak, setPageBreak] = useLocalStorage("savecodex_page_break", false);
+  const [aiInput, setAiInput] = useLocalStorage("savecodex_ai_input", "auto");
+  const [trimOutput, setTrimOutput] = useLocalStorage("savecodex_trim_output", true);
   const noKey = useNoKey();
   const [geminiApiKey, setGeminiApiKey] = useLocalStorage("savecodex_gemini_key", "");
 
@@ -209,6 +211,8 @@ const Pack: FC = () => {
     setCwd("{}");
     setFilename("{}_pack");
     setPageBreak(false);
+    setAiInput("auto");
+    setTrimOutput(true);
     setAiProvider("gemini");
     setAiModel("gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite");
     setAiBaseUrl("");
@@ -287,6 +291,8 @@ const Pack: FC = () => {
     form.append("hostname", hostname);
     form.append("cwd", cwd || folderName || "~");
     form.append("page_break", String(pageBreak));
+    form.append("ai_input", aiInput);
+    form.append("trim", String(trimOutput));
     form.append("gemini_api_key", geminiApiKey);
     try {
       const adminPwdStr = window.localStorage.getItem("savecodex_admin_pwd");
@@ -535,9 +541,24 @@ const Pack: FC = () => {
                   onBlur={() => setCwdFocused(false)}
                 />
               </Box>
+              <Box>
+                <Text as="div" size="2" mb="1">AI Input</Text>
+                <Select.Root value={aiInput} onValueChange={setAiInput}>
+                  <Select.Trigger style={{ width: "100%" }} />
+                  <Select.Content>
+                    <Select.Item value="auto">Auto (only if reads stdin)</Select.Item>
+                    <Select.Item value="always">Always</Select.Item>
+                    <Select.Item value="never">Never</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+              </Box>
               <Flex align="center" gap="2" mt="2">
                 <Switch checked={pageBreak} onCheckedChange={setPageBreak} />
                 <Text size="2">Page Break per File</Text>
+              </Flex>
+              <Flex align="center" gap="2" mt="2">
+                <Switch checked={trimOutput} onCheckedChange={setTrimOutput} />
+                <Text size="2">Trim Long Output</Text>
               </Flex>
             </Grid>
           </Flex>

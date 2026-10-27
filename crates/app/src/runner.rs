@@ -15,6 +15,8 @@ pub struct LangConfig {
     pub build: Option<Vec<String>>,
     pub run: Vec<String>,
     #[serde(default)]
+    pub stdin: Option<Vec<String>>,
+    #[serde(default)]
     windows: Option<OsSpecificConfig>,
     #[serde(default)]
     macos: Option<OsSpecificConfig>,
@@ -128,6 +130,13 @@ pub fn load_configurations() -> Result<HashMap<String, LangConfig>> {
     let configs = configs.into_iter().map(|(k, v)| (k, v.resolve_os())).collect();
 
     Ok(configs)
+}
+
+/// Unknown languages or configs without `stdin` markers count as needing input.
+pub fn needs_stdin(ext: &str, code: &str) -> bool {
+    load_configurations().ok()
+        .and_then(|c| c.get(ext)?.stdin.clone())
+        .map_or(true, |markers| markers.iter().any(|m| code.contains(m.as_str())))
 }
 
 fn bwrap_available() -> bool {
@@ -418,4 +427,16 @@ pub async fn run_file_in(
     let out = out.replace("^D\x08\x08", "").replace("^D", "");
     
     Ok((executed_cmd, out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_stdin;
+
+    #[test]
+    fn detects_stdin() {
+        assert!(needs_stdin("py", "n = int(input())"));
+        assert!(!needs_stdin("py", "print('hi')"));
+        assert!(needs_stdin("zzz", "anything"));
+    }
 }

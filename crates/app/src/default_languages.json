@@ -9,7 +9,12 @@
         "python",
         "{file}"
       ]
-    }
+    },
+    "stdin": [
+      "input(",
+      "sys.stdin",
+      "fileinput"
+    ]
   },
   "rs": {
     "build": [
@@ -31,7 +36,10 @@
       "run": [
         "{dir}/{file_stem}.exe"
       ]
-    }
+    },
+    "stdin": [
+      "stdin()"
+    ]
   },
   "cpp": {
     "build": [
@@ -53,7 +61,14 @@
       "run": [
         "{dir}/{file_stem}.exe"
       ]
-    }
+    },
+    "stdin": [
+      "cin",
+      "scanf",
+      "getchar",
+      "fgets",
+      "gets("
+    ]
   },
   "c": {
     "build": [
@@ -75,24 +90,49 @@
       "run": [
         "{dir}/{file_stem}.exe"
       ]
-    }
+    },
+    "stdin": [
+      "scanf",
+      "getchar",
+      "fgets",
+      "gets(",
+      "getc(stdin",
+      "read(0"
+    ]
   },
   "js": {
     "run": [
       "node",
       "{file}"
+    ],
+    "stdin": [
+      "readline",
+      "process.stdin",
+      "prompt(",
+      "/dev/stdin"
     ]
   },
   "java": {
     "run": [
       "java",
       "{file}"
+    ],
+    "stdin": [
+      "System.in",
+      "Scanner",
+      "Console"
     ]
   },
   "sh": {
     "run": [
       "bash",
       "{file}"
+    ],
+    "stdin": [
+      "read ",
+      "read\t",
+      "$(cat",
+      "/dev/stdin"
     ]
   }
 }

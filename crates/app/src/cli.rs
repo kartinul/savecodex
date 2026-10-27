@@ -125,6 +125,14 @@ enum Commands {
         #[arg(long)]
         page_break: bool,
 
+        /// When to ask the AI for stdin: auto (only files that read stdin), always, or never.
+        #[arg(long, value_enum, default_value_t, env = "SAVECODEX_AI_INPUT")]
+        ai_input: crate::pack::AiInput,
+
+        /// Don't trim long output to 150 lines / 200 chars per line (hard cap of 1000 lines / 300 chars still applies).
+        #[arg(long, env = "SAVECODEX_NO_TRIM")]
+        no_trim: bool,
+
         /// Max files to process in parallel.
         #[arg(short, long, default_value_t = 15, env = "SAVECODEX_JOBS")]
         jobs: usize,
@@ -260,6 +268,8 @@ pub async fn run() -> Result<()> {
             hostname,
             cwd,
             page_break,
+            ai_input,
+            no_trim,
             jobs,
         } => {
             let resolved_username = username.unwrap_or_else(|| {
@@ -336,7 +346,7 @@ pub async fn run() -> Result<()> {
                     println!("   ℹ️  Text: {}", text.replace('\n', "\\n"));
                 }
 
-                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), page_break, &opts, None, jobs, recursive).await?;
+                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), page_break, &opts, None, jobs, recursive, ai_input, !no_trim).await?;
             }
         }
         Commands::Solve { input, output } => {

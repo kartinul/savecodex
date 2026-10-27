@@ -9,6 +9,15 @@ use tokio::task::JoinSet;
 use tracing::info;
 use natord::compare;
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum, Default, PartialEq)]
+pub enum AiInput {
+    /// Only for files that look like they read stdin.
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
 pub async fn run_pack(
     folder: &Path,
     output: Option<&Path>,
@@ -20,6 +29,8 @@ pub async fn run_pack(
     ai_config: Option<crate::ai::AiConfig>,
     jobs: usize,
     recursive: bool,
+    ai_input: AiInput,
+    trim: bool,
 ) -> Result<()> {
     tracing::debug!("run_pack: folder={:?} output={:?} extensions={:?} jobs={} recursive={}", folder, output, extensions, jobs, recursive);
     info!("Starting pack: {}", folder.display());
@@ -113,7 +124,7 @@ pub async fn run_pack(
 
         set.spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed");
-            let result = process_file(idx, total, &path, &folder, &opts, ai_config.as_ref().as_ref()).await;
+            let result = process_file(idx, total, &path, &folder, &opts, ai_config.as_ref().as_ref(), ai_input, trim).await;
             (idx, result)
         });
     }
@@ -144,6 +155,8 @@ async fn process_file(
     folder: &Path,
     opts: &crate::term_gen::TermGenOptions,
     ai_config: Option<&crate::ai::AiConfig>,
+    ai_input: AiInput,
+    trim: bool,
 ) -> Result<crate::docx_gen::PackItem> {
     // When the pack target is the file itself, strip_prefix yields "" — fall back to the file name.
     let rel = path.strip_prefix(folder).unwrap_or(path);
@@ -156,15 +169,26 @@ async fn process_file(
 
     let content = fs::read_to_string(path).context("Failed to read file")?;
 
-    tracing::debug!("[{}] Requesting AI input", filename);
-    let input_text = match crate::ai::generate_input(&[(&filename, &content)], ai_config).await {
-        Ok(t) => {
-            tracing::debug!("[{}] AI input ready", filename);
-            t
-        }
-        Err(e) => {
-            tracing::warn!("[{}] AI input failed: {}", filename, e);
-            String::new()
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let wants_ai = match ai_input {
+        AiInput::Always => true,
+        AiInput::Never => false,
+        AiInput::Auto => crate::runner::needs_stdin(ext, &content),
+    };
+    let input_text = if !wants_ai {
+        tracing::debug!("[{}] Skipping AI input", filename);
+        String::new()
+    } else {
+        tracing::debug!("[{}] Requesting AI input", filename);
+        match crate::ai::generate_input(&[(&filename, &content)], ai_config).await {
+            Ok(t) => {
+                tracing::debug!("[{}] AI input ready", filename);
+                t
+            }
+            Err(e) => {
+                tracing::warn!("[{}] AI input failed: {}", filename, e);
+                String::new()
+            }
         }
     };
 
@@ -180,8 +204,8 @@ async fn process_file(
     };
 
     let mut lines: Vec<&str> = out.split('\n').collect();
-    let max_lines = 150;
-    let max_line_len = 200;
+    // untrimmed still keeps a hard cap so a print loop can't blow up image memory
+    let (max_lines, max_line_len) = if trim { (150, 200) } else { (1000, 300) };
     let mut truncated = false;
     if lines.len() > max_lines {
         lines.truncate(max_lines);
@@ -190,7 +214,7 @@ async fn process_file(
     let mut safe_out = String::new();
     for line in lines {
         if line.len() > max_line_len {
-            safe_out.push_str(&line[..max_line_len]);
+            safe_out.push_str(&line[..line.floor_char_boundary(max_line_len)]);
             safe_out.push_str("... [line truncated]\n");
         } else {
             safe_out.push_str(line);
@@ -211,7 +235,7 @@ async fn process_file(
     let mut img = crate::term_gen::generate_terminal_image(&raw, opts)?;
     let max_w = 4000;
     let max_h = 10000;
-    if img.width() > max_w || img.height() > max_h {
+    if trim && (img.width() > max_w || img.height() > max_h) {
         let crop_w = img.width().min(max_w);
         let crop_h = img.height().min(max_h);
         img = image::imageops::crop(&mut img, 0, 0, crop_w, crop_h).to_image();
