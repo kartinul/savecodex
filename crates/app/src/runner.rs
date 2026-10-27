@@ -320,6 +320,7 @@ pub async fn run_file_in(
     // Read thread setup (clone before spawn to prevent os error 5 on macOS if child exits fast)
     let mut reader = pair.master.try_clone_reader()?;
     let (tx, rx) = mpsc::channel();
+    let output = Arc::new(Mutex::new(String::new()));
     let (idle_tx, idle_rx) = mpsc::channel();
     
     let run_argv = sandboxed(&run_args, &work_dir);
@@ -333,16 +334,21 @@ pub async fn run_file_in(
     let child_clone = Arc::clone(&child);
     drop(pair.slave); 
     
+    let reader_output = Arc::clone(&output);
     std::thread::spawn(move || {
         let mut buf = [0u8; 1024];
-        let mut output = String::new();
         while let Ok(n) = reader.read(&mut buf) {
             if n == 0 { break; }
-            output.push_str(&String::from_utf8_lossy(&buf[..n]));
+            reader_output.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
             let _ = idle_tx.send(()); // Signal output activity
         }
-        let _ = tx.send(output);
+        let _ = tx.send(());
     });
+    // Some sandboxes (e.g. Render) never deliver PTY EOF after a kill, so don't wait on the reader forever.
+    let collect = move || {
+        let _ = rx.recv_timeout(Duration::from_secs(1));
+        output.lock().unwrap().clone()
+    };
     
     tracing::debug!("Spawned child process and output reader thread");
 
@@ -416,14 +422,14 @@ pub async fn run_file_in(
             tracing::warn!("Execution timeout! Killing child process.");
             let _ = child.lock().unwrap().kill();
             drop(pair.master); // Close PTY — signals reader thread to flush and exit
-            let partial = rx.recv().unwrap_or_default(); // Wait for reader thread to finish
+            let partial = collect();
             return Ok((executed_cmd, format!("{}\n\n[Timeout after 5 seconds]", partial)));
         }
     }
     
     tracing::debug!("Child process exited successfully");
     
-    let out = rx.recv().unwrap_or_default();
+    let out = collect();
     let out = out.replace("^D\x08\x08", "").replace("^D", "");
     
     Ok((executed_cmd, out))
