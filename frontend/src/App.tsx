@@ -181,15 +181,16 @@ const Pack: FC = () => {
   const [docTitleFocused, setDocTitleFocused] = useState(false);
   const [docTextFocused, setDocTextFocused] = useState(false);
   const [cwdFocused, setCwdFocused] = useState(false);
+  const [filenameFocused, setFilenameFocused] = useState(false);
 
   const [docTitle, setDocTitle] = useLocalStorage("savecodex_doc_title", "");
   const [docText, setDocText] = useLocalStorage("savecodex_doc_text", "DOCX of: {}");
   const [theme, setTheme] = useLocalStorage("savecodex_theme", "dark");
-  const [noPromptHighlight, setNoPromptHighlight] = useLocalStorage("savecodex_no_prompt", false);
   const [style, setStyle] = useLocalStorage("savecodex_style", "windows");
   const [username, setUsername] = useLocalStorage("savecodex_username", "admin");
   const [hostname, setHostname] = useLocalStorage("savecodex_hostname", "desktop");
   const [cwd, setCwd] = useLocalStorage("savecodex_cwd", "{}");
+  const [filename, setFilename] = useLocalStorage("savecodex_filename", "{}_pack");
   const [pageBreak, setPageBreak] = useLocalStorage("savecodex_page_break", false);
   const noKey = useNoKey();
   const [geminiApiKey, setGeminiApiKey] = useLocalStorage("savecodex_gemini_key", "");
@@ -202,11 +203,11 @@ const Pack: FC = () => {
     setDocTitle("{}");
     setDocText("DOCX of: {}");
     setTheme("dark");
-    setNoPromptHighlight(false);
     setStyle("windows");
     setUsername("admin");
     setHostname("desktop");
     setCwd("{}");
+    setFilename("{}_pack");
     setPageBreak(false);
     setAiProvider("gemini");
     setAiModel("gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite");
@@ -281,7 +282,6 @@ const Pack: FC = () => {
     form.append("doc_title", docTitle || folderName);
     form.append("doc_text", docText);
     form.append("theme", theme);
-    form.append("no_prompt_highlight", String(noPromptHighlight));
     form.append("style", style);
     form.append("username", username);
     form.append("hostname", hostname);
@@ -311,7 +311,8 @@ const Pack: FC = () => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${folderName || "pack"}_pack.docx`;
+      const base = filename.replace("{}", folderName || "pack").replace(/\.docx$/i, "").trim();
+      a.download = `${base || `${folderName || "pack"}_pack`}.docx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -450,6 +451,21 @@ const Pack: FC = () => {
             <Text as="div" size="2" mb="1" weight="bold">Username</Text>
             <TextField.Root value={username} onChange={e => setUsername(e.target.value)} />
           </Box>
+          <Box>
+            <Text as="div" size="2" mb="1" weight="bold">Hostname</Text>
+            <TextField.Root value={hostname} onChange={e => setHostname(e.target.value)} />
+          </Box>
+          <Box>
+            <Text as="div" size="2" mb="1" weight="bold">Filename</Text>
+            <TextField.Root
+              value={filenameFocused ? filename : filename.replace("{}", folderName || "folder")}
+              onChange={e => setFilename(e.target.value)}
+              onFocus={() => setFilenameFocused(true)}
+              onBlur={() => setFilenameFocused(false)}
+            >
+              <TextField.Slot side="right">.docx</TextField.Slot>
+            </TextField.Root>
+          </Box>
         </Grid>
 
         {showAdvanced && (
@@ -510,11 +526,6 @@ const Pack: FC = () => {
                   </Select.Content>
                 </Select.Root>
               </Box>
-
-              <Box>
-                <Text as="div" size="2" mb="1">Hostname</Text>
-                <TextField.Root value={hostname} onChange={e => setHostname(e.target.value)} />
-              </Box>
               <Box>
                 <Text as="div" size="2" mb="1">CWD</Text>
                 <TextField.Root
@@ -524,10 +535,6 @@ const Pack: FC = () => {
                   onBlur={() => setCwdFocused(false)}
                 />
               </Box>
-              <Flex align="center" gap="2" mt="2">
-                <Switch checked={noPromptHighlight} onCheckedChange={setNoPromptHighlight} />
-                <Text size="2">No Prompt Highlight</Text>
-              </Flex>
               <Flex align="center" gap="2" mt="2">
                 <Switch checked={pageBreak} onCheckedChange={setPageBreak} />
                 <Text size="2">Page Break per File</Text>
