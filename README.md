@@ -1,29 +1,37 @@
 # savecodex
 
-savecodex reads all the files in the folder you select, generate input automatically using ai, types those inputs, takes screenshots, makes documents and downloads it (docx).
-Just select your folder and enter your GEMINI API KEY to begin with.
+savecodex reads the code files in a folder you select, uses AI to generate inputs for them, runs them with those inputs, screenshots the terminal output and packs everything into a DOCX document.
+Just select your folder and enter your Gemini API key to begin.
 
 ## Demo
 
-### The GEMINI key varient
+### Gemini key variant
 
 <https://youtu.be/-i_L3jEiWxc>
 
-### The ADMIN key varient
+### Admin key variant
 
 <https://youtu.be/8jD1Prdp1cc>
 
 ## Installation
 
-Ensure you have Rust installed, then build the project:
+Requires Rust and [bun](https://bun.sh). The frontend is embedded into the binary, so build it first:
 
 ```bash
-cargo build --release
+make build   # bun install + bun run build + cargo build --release
+```
+
+Or run everything with Docker (see `Dockerfile` / `render.yaml`).
+
+For development (frontend on `:5173`, backend on `:7878`):
+
+```bash
+make dev
 ```
 
 ## AI & Environment Setup
 
-savecodex leverages AI (like Gemini, Groq, or Ollama) for intelligent code generation and automation (used by the `solve` command or internal AI modules).
+savecodex uses AI (Gemini, or any OpenAI-compatible provider like Groq or Ollama) to generate program inputs.
 
 1. Copy `.env.example` to `.env`:
 
@@ -31,8 +39,9 @@ savecodex leverages AI (like Gemini, Groq, or Ollama) for intelligent code gener
    cp .env.example .env
    ```
 
-2. Open `.env` and fill in your preferred API keys. By default, savecodex uses Google Gemini, but you can configure any OpenAI-compatible provider (Groq, Ollama, etc.) for either code generation or input generation.
-3. Verify your keys are working by running the included utility script:
+2. Fill in your keys. Gemini is the default; set `CODE_PROVIDER` / `INPUT_PROVIDER` to `openai_compatible` with a `*_BASE_URL` and `*_API_KEY` to use another provider. Multiple comma-separated Gemini models fall back in order.
+3. Optionally set `ADMIN_PASSWORD` so users can log in on the frontend without their own API key.
+4. Check your keys work:
 
    ```bash
    ./apitest
@@ -40,44 +49,43 @@ savecodex leverages AI (like Gemini, Groq, or Ollama) for intelligent code gener
 
 ## CLI Usage
 
-savecodex provides several commands to handle different workflows. You can run the CLI via `cargo run -- <command>` or by executing the compiled binary directly.
+Run via `cargo run -- <command>` or the compiled binary `./target/release/savecodex <command>`.
 
-### 1. `serve`
+### `serve`
 
-Starts the backend HTTP API server. This is used to connect the savecodex frontend application.
-
-**Usage:**
+Starts the HTTP server that also serves the web frontend.
 
 ```bash
-savecodex serve --host 127.0.0.1 --port 7878 --debug
+savecodex serve --host 127.0.0.1 --port 7878
 ```
 
-- `--host`: The address to bind the server to (default: `127.0.0.1`).
-- `--port`: The port to listen on (default: `7878`).
-- `--debug`: Enable detailed debug logging, especially for AI provider communications.
+- `--host`: Address to bind to (default: `127.0.0.1`).
+- `--port`: Port to listen on (default: `7878`).
+- `--no-key`: Use the server's `.env` AI config for everyone; users need no API key or admin password (env: `SAVECODEX_NO_KEY`).
 
-### 2. `pack`
+On Linux, user code runs sandboxed with `bwrap` when it is installed.
 
-Reads all source code files matching specific extensions in one or more files/folders, uses AI to generate mock `stdin` for each, executes them to capture their output (with `term_gen`), and packages everything into beautifully formatted DOCX documents.
+### `pack`
 
-**Usage:**
+Finds source files in one or more files/folders, generates `stdin` for each with AI, runs them, renders the terminal output as screenshots and writes a DOCX per folder.
 
 ```bash
-savecodex pack test_folder -o test_output --ext java,py --doc-title "Assignment {}"
-savecodex pack test_folder -o test_output -r   # recurse into subdirectories
+savecodex pack test_folder -o "test_{}" --ext java,py --doc-title "Assignment {}"
+savecodex pack test_folder -r   # recurse into subdirectories
 ```
 
-- `<folder_paths...>`: One or more files or directories containing your source code (e.g., `test_folder/` or `test_main.rs`).
-- `-r, --recursive`: Recurse into subdirectories. By default only the given folder itself is packed.
-- `-o, --output`: The base name for the output files (`.docx`). Supports the `{}` placeholder to dynamically insert the file/folder name.
-- `--ext`: Comma-separated list of file extensions to include (e.g., `java,py,rs`).
-- `--doc-title`: Main heading for the document. Supports the `{}` placeholder.
-- `--doc-text`: Optional description text under the heading. Supports the `{}` placeholder.
+- `<paths...>`: Files or folders to pack.
+- `-r, --recursive`: Recurse into subdirectories (default: only the folder itself).
+- `-o, --output`: Output file name. `{}` is replaced with the folder name, and is required when packing multiple inputs.
+- `--ext`: Comma-separated extensions to include (e.g. `java,py,rs`).
+- `--doc-title`: Document heading (default: folder name). Supports `{}`.
+- `--doc-text`: Text under the heading. Supports `{}`.
+- `--page-break`: Page break after each file's output.
+- `-j, --jobs`: Max files processed in parallel (default: `15`).
 
-*(Note: `pack` also supports all the terminal styling arguments available in the `term` command, such as `--theme`, `--font-size`, `--style`, etc.)*
+`pack` also takes all the screenshot options from [`term`](#term).
 
-**Configuring Defaults via `.env`:**
-You can set default values for any `pack` argument in your `.env` file to avoid passing them in the CLI:
+**Defaults via `.env`:** `SAVECODEX_OUTPUT`, `SAVECODEX_EXT`, `SAVECODEX_DOC_TITLE`, `SAVECODEX_DOC_TEXT`, `SAVECODEX_STYLE` and `SAVECODEX_JOBS` set defaults for the matching flags:
 
 ```env
 SAVECODEX_STYLE=macos
@@ -85,36 +93,41 @@ SAVECODEX_OUTPUT="1234567890_{}.docx"
 SAVECODEX_DOC_TEXT="\nJohn Doe - 1234567890 - {}\n"
 ```
 
-### 3. `solve`
+### `run`
 
-Automates the assignment workflow entirely. It reads questions from an input PDF or DOCX file, uses AI to write the code solutions, runs the code to verify it and capture output, and finally exports the results into DOCX and PDF.
-
-**Usage:**
+Compiles and runs a single source file in a pseudo-terminal and prints the transcript.
 
 ```bash
-savecodex solve test_input.pdf -o test_output
+savecodex run main.py -i "5"
 ```
 
-- `<input_file>`: The assignment file to parse (PDF or DOCX).
-- `-o, --output`: The base name for the generated solutions files (`.docx` and `.pdf`).
+- `-i, --input`: stdin to send to the program.
+- `-o, --output`: Write the transcript to a file instead of stdout.
 
-### 4. `term` (Dev/Testing Tool)
+### `term`
 
-A utility command that reads text (plain or ANSI-colored) from a file or standard input and renders it into a PNG image of a fake terminal window. This is highly customizable and useful for generating code snippets or terminal outputs for documentation.
-
-**Usage:**
+Renders a fake terminal window screenshot (PNG), either from running a file or from text (plain or ANSI-colored).
 
 ```bash
-savecodex term -i test_input.txt -o test_term.png --style windows --title "Title" --theme dark
+savecodex term --runfile main.py --input "5" -o out.png --style macos --show
+savecodex term --text-file output.txt -o out.png
 ```
 
-- `-i, --input`: The file to read text from. If omitted, reads from `stdin`.
-- `-o, --output`: The path to save the generated PNG (default: `term.png`).
-- `--style`: The window control style. Options are `windows` (default), `macos`, or `ubuntu` (`linux` still works).
-- `--title`: The text to display in the window's title bar (default: `bash`).
-- `--theme`: The color theme of the window. Options are `dark` (default) or `light`.
-- `--font-size`: The font size in pixels (default: `18.0`).
-- `--padding`: Padding around the text inside the window (default: `28`).
-- `--username`: Realistic prompt username (default: `local`).
-- `--hostname`: Realistic prompt hostname (default: `host`).
-- `--cwd`: Realistic prompt current working directory (default: `~`).
+- `--runfile`: Source file to run and render.
+- `--input`: stdin for `--runfile`.
+- `--text-file`: Text file to render instead. Reads stdin if neither is given.
+- `-o, --output`: PNG path (default: `term.png`).
+- `--show`: Open the image after writing it.
+- `--style`: `windows` (default), `macos` or `ubuntu` (`linux` also works).
+- `--theme`: `dark` (default) or `light`.
+- `--font-size`: Font size in pixels (default: `18`).
+- `--padding`: Padding around the text (default: matches the real terminal).
+- `--min-cols`: Minimum window width in columns (default: `80`).
+- `--prompt`: Prompt string to highlight (default: `"$ "`); `--no-prompt-highlight` disables it.
+- `--messy`: Realistic imperfections, `0` (off) to `3`; `--seed` fixes the randomness.
+- `--banner`: Print the PowerShell startup banner (windows style).
+- `--username`, `--hostname`, `--cwd`: Prompt details (default: your current user, machine and directory).
+
+### `solve` (not implemented yet)
+
+Planned: read questions from a PDF/DOCX, write solutions with AI, run them and export to DOCX + PDF.
