@@ -3,11 +3,16 @@ use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::info;
 use natord::compare;
+
+// Builds are CPU-bound; running more than the CPU quota at once makes them hit the build timeout.
+static RUN_SLOTS: LazyLock<Semaphore> = LazyLock::new(|| {
+    Semaphore::new(std::thread::available_parallelism().map_or(1, |n| n.get()))
+});
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum, Default, PartialEq)]
 pub enum AiInput {
@@ -193,6 +198,7 @@ async fn process_file(
     };
 
     tracing::debug!("[{}] Running via PTY (cwd: {})", filename, folder.display());
+    let _slot = RUN_SLOTS.acquire().await.expect("semaphore closed");
     let t0 = std::time::Instant::now();
     let run_result = crate::runner::run_file_in(path, if input_text.is_empty() { None } else { Some(&input_text) }, Some(folder)).await;
     let (cmd, out) = match run_result {
