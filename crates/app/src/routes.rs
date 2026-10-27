@@ -38,7 +38,6 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
     let mut theme = "dark".to_string();
     let mut prompt = "$ ".to_string();
     let mut no_prompt_highlight = false;
-    let mut padding: Option<i32> = None;
     let mut style = crate::term_gen::WindowStyle::Windows;
     let mut username = "local".to_string();
     let mut hostname = "host".to_string();
@@ -98,7 +97,6 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
                 "theme" => theme = text,
                 "prompt" => prompt = text,
                 "no_prompt_highlight" => no_prompt_highlight = text == "true",
-                "padding" => padding = text.parse().ok(),
                 "style" => {
                     style = match text.as_str() {
                         "macos" => crate::term_gen::WindowStyle::Macos,
@@ -162,7 +160,7 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
         theme,
         prompt,
         no_prompt_highlight,
-        padding: padding.unwrap_or(style.padding()),
+        padding: style.padding(),
         messy: 0,
         seed: None,
         banner: false,

@@ -68,11 +68,6 @@ enum Commands {
         // Output format is always DOCX now
 
 
-
-        /// Font size in pixels.
-        #[arg(long, default_value_t = 18.0)]
-        font_size: f32,
-
         /// Color theme (dark or light).
         #[arg(long, default_value = "dark")]
         theme: String,
@@ -84,10 +79,6 @@ enum Commands {
         /// Disable prompt highlighting.
         #[arg(long)]
         no_prompt_highlight: bool,
-
-        /// Padding around text (default: what the real terminal uses).
-        #[arg(long)]
-        padding: Option<i32>,
 
         /// Window style (windows, macos, ubuntu).
         #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows, env = "SAVECODEX_STYLE")]
@@ -169,7 +160,7 @@ enum Commands {
         runfile: Option<PathBuf>,
 
         /// Optional stdin input to send to the executing program (used with --runfile).
-        #[arg(long)]
+        #[arg(short, long)]
         input: Option<String>,
 
         /// Text file to render (if not using --runfile). Reads from stdin if omitted.
@@ -180,15 +171,6 @@ enum Commands {
         #[arg(short, long, default_value = "term.png")]
         output: PathBuf,
 
-        /// Open the generated image after writing it.
-        #[arg(long)]
-        show: bool,
-
-
-
-        /// Font size in pixels.
-        #[arg(long, default_value_t = 18.0)]
-        font_size: f32,
 
         /// Color theme (dark or light).
         #[arg(long, default_value = "dark")]
@@ -202,12 +184,12 @@ enum Commands {
         #[arg(long)]
         no_prompt_highlight: bool,
 
-        /// Padding around text (default: what the real terminal uses).
-        #[arg(long)]
-        padding: Option<i32>,
+        /// Don't draw a prompt line above the text (or above the command with --runfile).
+        #[arg(long, alias = "noprompt")]
+        no_prompt: bool,
 
         /// Window style (windows, macos, ubuntu).
-        #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows)]
+        #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows, env = "SAVECODEX_STYLE")]
         style: crate::term_gen::WindowStyle,
 
         /// Realistic imperfections: 0 (off) to 3 (very messy).
@@ -254,11 +236,9 @@ pub async fn run() -> Result<()> {
             ext,
             doc_title,
             doc_text,
-            font_size,
             theme,
             prompt,
             no_prompt_highlight,
-            padding,
             messy,
             seed,
             banner,
@@ -300,11 +280,11 @@ pub async fn run() -> Result<()> {
             });
 
             let opts = crate::term_gen::TermGenOptions {
-                font_size,
+                font_size: 18.0,
                 theme,
                 prompt,
                 no_prompt_highlight,
-                padding: padding.unwrap_or(style.padding()),
+                padding: style.padding(),
                 messy,
                 seed,
                 banner,
@@ -367,12 +347,10 @@ pub async fn run() -> Result<()> {
             input,
             text_file,
             output,
-            show,
-            font_size,
             theme,
             prompt,
             no_prompt_highlight,
-            padding,
+            no_prompt,
             messy,
             seed,
             banner,
@@ -413,22 +391,25 @@ pub async fn run() -> Result<()> {
             
             if let Some(rf) = runfile {
                 let (exec_cmd, out) = crate::runner::run_file(&rf, input.as_deref()).await?;
-                // Construct fake prompt
-                let fake_prompt = format!("{}{}\n", prompt, exec_cmd);
-                raw = format!("{}{}", fake_prompt, out);
-            } else if let Some(path) = text_file {
-                raw = std::fs::read_to_string(&path)?;
+                raw = if no_prompt { out } else { format!("{}{}\n{}", prompt, exec_cmd, out) };
             } else {
-                use std::io::Read;
-                std::io::stdin().read_to_string(&mut raw)?;
+                if let Some(path) = text_file {
+                    raw = std::fs::read_to_string(&path)?;
+                } else {
+                    use std::io::Read;
+                    std::io::stdin().read_to_string(&mut raw)?;
+                }
+                if !no_prompt && !raw.starts_with(&prompt) {
+                    raw = format!("{}\n{}", prompt, raw);
+                }
             }
 
             let opts = crate::term_gen::TermGenOptions {
-                font_size,
+                font_size: 18.0,
                 theme,
                 prompt,
                 no_prompt_highlight,
-                padding: padding.unwrap_or(style.padding()),
+                padding: style.padding(),
                 messy,
                 seed,
                 banner,
@@ -442,10 +423,6 @@ pub async fn run() -> Result<()> {
             let img = crate::term_gen::generate_terminal_image(&raw, &opts)?;
             img.save(&output)?;
             println!("wrote {} ({}x{})", output.display(), img.width(), img.height());
-            if show {
-                let opener = if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "explorer" } else { "xdg-open" };
-                std::process::Command::new(opener).arg(&output).spawn()?;
-            }
         }
     }
 

@@ -51,23 +51,9 @@ savecodex uses AI (Gemini, or any OpenAI-compatible provider like Groq or Ollama
 
 Run via `cargo run -- <command>` or the compiled binary `./target/release/savecodex <command>`.
 
-### `serve`
-
-Starts the HTTP server that also serves the web frontend.
-
-```bash
-savecodex serve --host 127.0.0.1 --port 7878
-```
-
-- `--host`: Address to bind to (default: `127.0.0.1`).
-- `--port`: Port to listen on (default: `7878`).
-- `--no-key`: Use the server's `.env` AI config for everyone; users need no API key or admin password (env: `SAVECODEX_NO_KEY`).
-
-On Linux, user code runs sandboxed with `bwrap` when it is installed.
-
 ### `pack`
 
-Finds source files in one or more files/folders, generates `stdin` for each with AI, runs them, renders the terminal output as screenshots and writes a DOCX per folder.
+Finds source files in one or more files/folders, generates `stdin` with AI for files that read input, runs them, renders the terminal output as screenshots and writes a DOCX per folder.
 
 ```bash
 savecodex pack test_folder -o "test_{}" --ext java,py --doc-title "Assignment {}"
@@ -75,17 +61,21 @@ savecodex pack test_folder -r   # recurse into subdirectories
 ```
 
 - `<paths...>`: Files or folders to pack.
-- `-r, --recursive`: Recurse into subdirectories (default: only the folder itself).
 - `-o, --output`: Output file name. `{}` is replaced with the folder name, and is required when packing multiple inputs.
+- `-r, --recursive`: Recurse into subdirectories (default: only the folder itself).
 - `--ext`: Comma-separated extensions to include (e.g. `java,py,rs`).
 - `--doc-title`: Document heading (default: folder name). Supports `{}`.
 - `--doc-text`: Text under the heading. Supports `{}`.
 - `--page-break`: Page break after each file's output.
+- `--ai-input`: When to ask the AI for stdin: `auto` (default, only files that contain a stdin marker such as `input(` or `scanf`), `always` or `never`.
+- `--no-trim`: Don't trim output to 150 lines / 200 chars per line (a hard cap of 1000 lines / 300 chars still applies).
 - `-j, --jobs`: Max files processed in parallel (default: `15`).
 
-`pack` also takes all the screenshot options from [`term`](#term).
+`pack` also takes the screenshot options from [`term`](#term) (`--style`, `--theme`, `--username`, ...), except `--no-prompt`.
 
-**Defaults via `.env`:** `SAVECODEX_OUTPUT`, `SAVECODEX_EXT`, `SAVECODEX_DOC_TITLE`, `SAVECODEX_DOC_TEXT`, `SAVECODEX_STYLE` and `SAVECODEX_JOBS` set defaults for the matching flags:
+Stdin markers live in the `stdin` list of each language in `default_languages.json` and can be overridden in your own `languages.json`. A language without a `stdin` list always gets AI input.
+
+**Defaults via `.env`:** `SAVECODEX_OUTPUT`, `SAVECODEX_EXT`, `SAVECODEX_DOC_TITLE`, `SAVECODEX_DOC_TEXT`, `SAVECODEX_STYLE`, `SAVECODEX_JOBS`, `SAVECODEX_AI_INPUT` and `SAVECODEX_NO_TRIM` set defaults for the matching flags:
 
 ```env
 SAVECODEX_STYLE=macos
@@ -109,24 +99,43 @@ savecodex run main.py -i "5"
 Renders a fake terminal window screenshot (PNG), either from running a file or from text (plain or ANSI-colored).
 
 ```bash
-savecodex term --runfile main.py --input "5" -o out.png --style macos --show
+savecodex term --runfile main.py -i "5" -o out.png --style macos
 savecodex term --text-file output.txt -o out.png
 ```
 
 - `--runfile`: Source file to run and render.
-- `--input`: stdin for `--runfile`.
-- `--text-file`: Text file to render instead. Reads stdin if neither is given.
+- `-i, --input`: stdin for `--runfile`.
+- `--text-file`: Text file to render instead. Reads stdin if neither is given. A prompt line is drawn above the text unless it already starts with one.
 - `-o, --output`: PNG path (default: `term.png`).
-- `--show`: Open the image after writing it.
-- `--style`: `windows` (default), `macos` or `ubuntu` (`linux` also works).
+- `--style`: `windows` (default), `macos` or `ubuntu` (`linux` also works). Defaults from `SAVECODEX_STYLE`.
 - `--theme`: `dark` (default) or `light`.
-- `--font-size`: Font size in pixels (default: `18`).
-- `--padding`: Padding around the text (default: matches the real terminal).
-- `--min-cols`: Minimum window width in columns (default: `80`).
-- `--prompt`: Prompt string to highlight (default: `"$ "`); `--no-prompt-highlight` disables it.
+- `--username`, `--hostname`, `--cwd`: Prompt details (default: your current user, machine and directory).
+- `--no-prompt`: Don't draw the prompt line (alias `--noprompt`).
 - `--messy`: Realistic imperfections, `0` (off) to `3`; `--seed` fixes the randomness.
 - `--banner`: Print the PowerShell startup banner (windows style).
-- `--username`, `--hostname`, `--cwd`: Prompt details (default: your current user, machine and directory).
+- `--min-cols`: Minimum window width in columns (default: `80`).
+- `--prompt`: Prompt string to highlight (default: `"$ "`); `--no-prompt-highlight` disables it.
+
+### `serve`
+
+Starts the HTTP server that also serves the web frontend.
+
+```bash
+savecodex serve --host 127.0.0.1 --port 7878
+```
+
+- `--port`: Port to listen on (default: `7878`).
+- `--host`: Address to bind to (default: `127.0.0.1`).
+- `--no-key`: Use the server's `.env` AI config for everyone; users need no API key or admin password (env: `SAVECODEX_NO_KEY`).
+
+### Sandboxing
+
+Every command that runs code (`pack`, `run`, `term --runfile`, the server) uses the same runner:
+
+- **All platforms:** the child gets an allowlisted environment (`PATH`, `LANG`, `TERM`, `HOME`, Java/Rust paths), so your `.env` secrets never reach user code. Builds time out after 30s, runs after 5s.
+- **Linux:** runs under `prlimit` (CPU, processes, file size, memory), and inside `bwrap` when it is installed (read-only system dirs, no home dir, private `/tmp`).
+- **Linux, server running as root** (Docker/Render): each job also runs as its own throwaway uid. `scripts/sandbox-firewall.sh` blocks LAN/metadata network access.
+- **macOS/Windows:** only the environment allowlist and timeouts apply, so only run code you trust.
 
 ### `solve` (not implemented yet)
 
