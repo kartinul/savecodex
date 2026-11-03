@@ -173,19 +173,35 @@ async fn process_file(
     info!("[{}/{}] Starting: {}", idx + 1, total, filename);
 
     let content = fs::read_to_string(path).context("Failed to read file")?;
+    let t0 = std::time::Instant::now();
+    let (cmd, out) = run_with_input(path, folder, &filename, &content, ai_config, ai_input).await;
+    let (img_bytes, img_width, img_height) = screenshot(Some(&cmd), &out, opts, trim)?;
+    info!("[{}/{}] Done: {} ({:.1}s)", idx + 1, total, filename, t0.elapsed().as_secs_f32());
 
+    Ok(crate::docx_gen::PackItem { filename, content, img_bytes, img_width, img_height, ..Default::default() })
+}
+
+/// Ask the AI for stdin when the code reads input, then run it; failures become the output text.
+pub async fn run_with_input(
+    path: &Path,
+    folder: &Path,
+    filename: &str,
+    content: &str,
+    ai_config: Option<&crate::ai::AiConfig>,
+    ai_input: AiInput,
+) -> (String, String) {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let wants_ai = match ai_input {
         AiInput::Always => true,
         AiInput::Never => false,
-        AiInput::Auto => crate::runner::needs_stdin(ext, &content),
+        AiInput::Auto => crate::runner::needs_stdin(ext, content),
     };
     let input_text = if !wants_ai {
         tracing::debug!("[{}] Skipping AI input", filename);
         String::new()
     } else {
         tracing::debug!("[{}] Requesting AI input", filename);
-        match crate::ai::generate_input(&[(&filename, &content)], ai_config).await {
+        match crate::ai::generate_input(&[(filename, content)], ai_config).await {
             Ok(t) => {
                 tracing::debug!("[{}] AI input ready", filename);
                 t
@@ -199,16 +215,17 @@ async fn process_file(
 
     tracing::debug!("[{}] Running via PTY (cwd: {})", filename, folder.display());
     let _slot = RUN_SLOTS.acquire().await.expect("semaphore closed");
-    let t0 = std::time::Instant::now();
-    let run_result = crate::runner::run_file_in(path, if input_text.is_empty() { None } else { Some(&input_text) }, Some(folder)).await;
-    let (cmd, out) = match run_result {
+    match crate::runner::run_file_in(path, if input_text.is_empty() { None } else { Some(&input_text) }, Some(folder)).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("[{}] Run failed: {}", filename, e);
-            (filename.clone(), format!("[Error running file: {}]", e))
+            (filename.to_string(), format!("[Error running file: {}]", e))
         }
-    };
+    }
+}
 
+/// Render output as a terminal PNG, with a `<prompt><cmd>` line on top when `cmd` is given.
+pub fn screenshot(cmd: Option<&str>, out: &str, opts: &crate::term_gen::TermGenOptions, trim: bool) -> Result<(Vec<u8>, u32, u32)> {
     let mut lines: Vec<&str> = out.split('\n').collect();
     // untrimmed still keeps a hard cap so a print loop can't blow up image memory
     let (max_lines, max_line_len) = if trim { (150, 200) } else { (1000, 300) };
@@ -231,10 +248,9 @@ async fn process_file(
         safe_out.push_str("\n... [output truncated due to length] ...\n");
     }
 
-    let fake_prompt = if !opts.no_prompt_highlight {
-        format!("{}{}\n", opts.prompt, cmd)
-    } else {
-        String::new()
+    let fake_prompt = match cmd {
+        Some(cmd) if !opts.no_prompt_highlight => format!("{}{}\n", opts.prompt, cmd),
+        _ => String::new(),
     };
     let raw = format!("{}{}", fake_prompt, safe_out);
 
@@ -246,13 +262,8 @@ async fn process_file(
         let crop_h = img.height().min(max_h);
         img = image::imageops::crop(&mut img, 0, 0, crop_w, crop_h).to_image();
     }
-    let img_width = img.width();
-    let img_height = img.height();
+    let (img_width, img_height) = img.dimensions();
     let mut img_buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut img_buf, image::ImageOutputFormat::Png)?;
-    let img_bytes = img_buf.into_inner();
-
-    info!("[{}/{}] Done: {} ({:.1}s)", idx + 1, total, filename, t0.elapsed().as_secs_f32());
-
-    Ok(crate::docx_gen::PackItem { filename, content, img_bytes, img_width, img_height })
+    Ok((img_buf.into_inner(), img_width, img_height))
 }

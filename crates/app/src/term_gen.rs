@@ -41,6 +41,8 @@ pub struct TermGenOptions {
     pub seed: Option<u64>,
     pub banner: bool,
     pub min_cols: u16,
+    /// Crop off the window's title bar (follow-up screenshots of the same question).
+    pub no_title_bar: bool,
 }
 
 impl Default for TermGenOptions {
@@ -59,6 +61,7 @@ impl Default for TermGenOptions {
             seed: None,
             banner: false,
             min_cols: 80,
+            no_title_bar: false,
         }
     }
 }
@@ -571,7 +574,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         WindowStyle::Ubuntu => fill_rect(&mut img, cx, cy, cell_w, line_h, rgba(default_fg)),
     }
 
-    let Some(chrome) = chrome else { return Ok(img) };
+    let Some(chrome) = chrome else { return Ok(crop_title_bar(img, title_bar_h, opts)) };
 
     for (px, py, pixel) in img.enumerate_pixels_mut() {
         if py < title_bar_h as u32 {
@@ -594,5 +597,11 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
     if messy >= 3 {
         img = image::imageops::blur(&img, 0.6);
     }
-    Ok(img)
+    Ok(crop_title_bar(img, title_bar_h, opts))
+}
+
+fn crop_title_bar(mut img: RgbaImage, title_bar_h: i32, opts: &TermGenOptions) -> RgbaImage {
+    if !opts.no_title_bar { return img; }
+    let (w, h) = img.dimensions();
+    image::imageops::crop(&mut img, 0, title_bar_h as u32, w, h - title_bar_h as u32).to_image()
 }

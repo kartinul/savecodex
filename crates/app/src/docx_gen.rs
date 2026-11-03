@@ -2,12 +2,29 @@ use anyhow::{Context, Result};
 use docx_rs::{Docx, Paragraph, Run, AlignmentType, Pic, BreakType};
 use std::path::Path;
 
+#[derive(Default)]
 pub struct PackItem {
     pub filename: String,
+    /// Replaces the numbered filename heading (solve uses the question label).
+    pub heading: Option<String>,
+    pub question: String,
     pub content: String,
+    pub answer: String,
+    /// Empty when there is nothing to show (written-only answers).
     pub img_bytes: Vec<u8>,
     pub img_width: u32,
     pub img_height: u32,
+}
+
+fn text_para(text: &str) -> Paragraph {
+    let mut run = Run::new();
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            run = run.add_break(BreakType::TextWrapping);
+        }
+        run = run.add_text(line);
+    }
+    Paragraph::new().add_run(run)
 }
 
 pub fn generate_docx(
@@ -55,19 +72,17 @@ pub fn generate_docx(
             }
         }
 
-        let heading_text = format!("{}. {}", index + 1, filename_no_ext);
-        let h2_para = Paragraph::new().add_run(Run::new().add_text(heading_text).size(36).bold());
-        
-        let mut code_run = Run::new();
-        for (i, line) in item.content.split('\n').enumerate() {
-            if i > 0 {
-                code_run = code_run.add_break(BreakType::TextWrapping);
+        let heading_text = item.heading.clone().unwrap_or_else(|| format!("{}. {}", index + 1, filename_no_ext));
+        docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_text(heading_text).size(36).bold()));
+        for text in [&item.question, &item.content, &item.answer] {
+            if !text.is_empty() {
+                docx = docx.add_paragraph(text_para(text));
             }
-            code_run = code_run.add_text(line);
         }
-        let code_para = Paragraph::new().add_run(code_run);
-        
-        let mut pic = Pic::new(&item.img_bytes);
+        if item.img_bytes.is_empty() {
+            continue;
+        }
+
         // Scale to fit on a standard page width (approx 600 pixels)
         // docx-rs 0.4 uses EMUs for image dimensions (1 pixel ≈ 9525 EMUs)
         let display_w = 600 * 9525;
@@ -76,15 +91,11 @@ pub fn generate_docx(
         } else {
             600 * 9525
         };
-        pic = pic.size(display_w, display_h); 
-        
+        let pic = Pic::new(&item.img_bytes).size(display_w, display_h);
         let img_run = Run::new()
             .add_break(BreakType::TextWrapping) // new line before image
             .add_image(pic);
-            
-        let img_para = Paragraph::new().add_run(img_run);
-        
-        docx = docx.add_paragraph(h2_para).add_paragraph(code_para).add_paragraph(img_para);
+        docx = docx.add_paragraph(Paragraph::new().add_run(img_run));
     }
 
     tracing::debug!("Creating DOCX file at {:?}", output);

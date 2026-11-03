@@ -1990,6 +1990,7 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "axum 0.7.9",
+ "base64",
  "clap",
  "directories",
  "docx-rs",
@@ -2010,6 +2011,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]

@@ -3,7 +3,29 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::env;
 
-use crate::prompts::{code_generation_prompt, input_generation_prompt};
+use crate::prompts::input_generation_prompt;
+
+/// One piece of a multimodal prompt: text, or an image as (mime type, bytes).
+pub enum Part {
+    Text(String),
+    Image(&'static str, Vec<u8>),
+}
+
+fn gemini_parts(parts: &[Part]) -> Vec<Value> {
+    use base64::Engine;
+    parts.iter().map(|p| match p {
+        Part::Text(t) => json!({"text": t}),
+        Part::Image(mime, bytes) => json!({"inline_data": {"mime_type": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes)}}),
+    }).collect()
+}
+
+fn openai_parts(parts: &[Part]) -> Vec<Value> {
+    use base64::Engine;
+    parts.iter().map(|p| match p {
+        Part::Text(t) => json!({"type": "text", "text": t}),
+        Part::Image(mime, bytes) => json!({"type": "image_url", "image_url": {"url": format!("data:{};base64,{}", mime, base64::engine::general_purpose::STANDARD.encode(bytes))}}),
+    }).collect()
+}
 
 #[derive(Clone, Debug)]
 pub enum Provider {
@@ -47,11 +69,10 @@ impl AiConfig {
     }
 }
 
-async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
+async fn send_request(config: &AiConfig, parts: &[Part], json_only: bool) -> Result<String> {
     let client = Client::new();
 
     tracing::debug!("Contacting AI provider...");
-    tracing::trace!("Prompt: {}", prompt);
 
     match config.provider {
         Provider::Gemini => {
@@ -64,11 +85,15 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
                     "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
                     model.trim(), config.api_key
                 );
-                let body = json!({
+                let mut body = json!({
                     "contents": [{
-                        "parts": [{"text": prompt}]
+                        "parts": gemini_parts(parts)
                     }]
                 });
+                if json_only {
+                    // thinking tokens count towards the output limit, so leave room for a full answer
+                    body["generationConfig"] = json!({"responseMimeType": "application/json", "maxOutputTokens": 65536});
+                }
 
                 let resp = match client.post(&url).json(&body).send().await {
                     Ok(r) => r,
@@ -97,12 +122,19 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
                     }
                 };
                 
-                let text = res["candidates"][0]["content"]["parts"][0]["text"].as_str();
+                // long answers can arrive split across several parts
+                let text: Option<String> = res["candidates"][0]["content"]["parts"].as_array()
+                    .map(|ps| ps.iter().filter_map(|p| p["text"].as_str()).collect::<String>())
+                    .filter(|t| !t.is_empty());
                 tracing::debug!("Received response from Gemini model {}", model.trim());
                 tracing::trace!("Response text: {:?}", text);
                     
+                if res["candidates"][0]["finishReason"].as_str() == Some("MAX_TOKENS") {
+                    last_err = Some(anyhow::anyhow!("{} hit its output token limit (reply cut off)", model.trim()));
+                    continue;
+                }
                 match text {
-                    Some(t) => return Ok(t.to_string()),
+                    Some(t) => return Ok(t),
                     None => {
                         let finish_reason = res["candidates"][0]["finishReason"].as_str();
                         if finish_reason == Some("STOP") {
@@ -123,7 +155,7 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
             let url = format!("{}/chat/completions", config.base_url.as_ref().unwrap());
             let body = json!({
                 "model": config.model,
-                "messages": [{"role": "user", "content": prompt}]
+                "messages": [{"role": "user", "content": openai_parts(parts)}]
             });
 
             let resp = client.post(&url)
@@ -154,10 +186,14 @@ async fn send_request(config: &AiConfig, prompt: &str) -> Result<String> {
     }
 }
 
-pub async fn generate_code(system_prompt: &str, question: &str) -> Result<String> {
-    let config = AiConfig::from_env("CODE")?;
-    let prompt = code_generation_prompt(system_prompt, question);
-    send_request(&config, &prompt).await
+/// Ask the `CODE_*` model (the smart one, used by `solve`).
+pub async fn ask_code(parts: &[Part]) -> Result<String> {
+    send_request(&AiConfig::from_env("CODE")?, parts, false).await
+}
+
+/// Like `ask_code`, but Gemini is put in JSON mode so the reply is valid JSON.
+pub async fn ask_code_json(parts: &[Part]) -> Result<String> {
+    send_request(&AiConfig::from_env("CODE")?, parts, true).await
 }
 
 pub async fn generate_input(files: &[(&str, &str)], config: Option<&AiConfig>) -> Result<String> {
@@ -170,5 +206,5 @@ pub async fn generate_input(files: &[(&str, &str)], config: Option<&AiConfig>) -
         }
     };
     let prompt = input_generation_prompt(files);
-    send_request(final_config, &prompt).await
+    send_request(final_config, &[Part::Text(prompt)], false).await
 }

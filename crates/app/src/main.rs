@@ -8,6 +8,7 @@ pub mod pack;
 pub mod ai;
 pub mod prompts;
 pub mod docx_gen;
+pub mod solve;
 
 
 use anyhow::Result;

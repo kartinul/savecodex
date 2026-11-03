@@ -16,6 +16,18 @@ pub struct LangConfig {
     pub run: Vec<String>,
     #[serde(default)]
     pub stdin: Option<Vec<String>>,
+    /// Interactive client: code is typed into `run` line by line instead of saved as a file.
+    #[serde(default)]
+    pub session: bool,
+    /// Prompt suffixes the session waits for before typing the next line.
+    #[serde(default)]
+    pub prompts: Vec<String>,
+    /// Command run (no PTY) before a session group starts, e.g. to recreate a scratch database.
+    #[serde(default)]
+    pub reset: Option<Vec<String>>,
+    /// `run` turns `{file}` into `{dir}/{file_stem}.png`.
+    #[serde(default)]
+    pub image: bool,
     #[serde(default)]
     windows: Option<OsSpecificConfig>,
     #[serde(default)]
@@ -435,14 +447,146 @@ pub async fn run_file_in(
     Ok((executed_cmd, out))
 }
 
+fn strip_escapes(line: &str) -> String {
+    let mut out = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            chars.by_ref().find(|c| c.is_ascii_alphabetic());
+        } else if !c.is_control() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Substitute `{n}` (the solve group number) in a session/reset command.
+pub fn with_group(args: &[String], n: usize) -> Vec<String> {
+    args.iter().map(|a| a.replace("{n}", &n.to_string())).collect()
+}
+
+/// Run `argv` from `work_dir` with `input` on stdin and no PTY; used for resets, setup and diagrams.
+pub async fn run_piped(argv: &[String], input: &str, work_dir: &Path) -> Result<String> {
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(work_dir)
+        .env_clear()
+        .envs(sandbox_env(work_dir))
+        .env("HOME", work_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("failed to start {}", argv[0]))?;
+    let mut stdin = child.stdin.take().context("no stdin")?;
+    stdin.write_all(input.as_bytes()).await?;
+    drop(stdin);
+    let out = timeout(Duration::from_secs(60), child.wait_with_output()).await.context("timed out after 60 seconds")??;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if !out.status.success() { bail!("{}", text.trim()); }
+    Ok(text)
+}
+
+/// Run an `image` language's command on `file` and return the PNG it writes to `{dir}/{file_stem}.png`.
+pub async fn render_image(config: &LangConfig, file: &Path, work_dir: &Path) -> Result<Vec<u8>> {
+    run_piped(&replace_vars(&config.run, file, work_dir), "", work_dir).await?;
+    std::fs::read(file.with_extension("png")).context("renderer wrote no PNG")
+}
+
+/// Type each chunk into one interactive session (e.g. `mysql`, `bash -i`) in a PTY and
+/// return each chunk's slice of the transcript, starting at the prompt it was typed at.
+pub fn run_session(argv: &[String], prompts: &[String], chunks: &[String], work_dir: &Path) -> Result<Vec<String>> {
+    let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })?;
+    let mut reader = pair.master.try_clone_reader()?;
+    let mut cmd = CommandBuilder::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    cmd.cwd(work_dir);
+    cmd.env_clear();
+    for (key, val) in sandbox_env(work_dir) { cmd.env(key, val); }
+    // solve sessions run on the host: keep `~/...` inside the job dir
+    cmd.env("HOME", work_dir);
+    let mut child = pair.slave.spawn_command(cmd)?;
+    drop(pair.slave);
+
+    let output = Arc::new(Mutex::new(String::new()));
+    let reader_output = Arc::clone(&output);
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 { break; }
+            reader_output.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    });
+    let len = || output.lock().unwrap().len();
+    let at_prompt = || {
+        let out = output.lock().unwrap();
+        prompts.iter().any(|p| out.ends_with(p.as_str()))
+    };
+    // Wait for new output that ends in a prompt; programs reading input (no prompt) fall back to 2s of silence.
+    let wait = |since: usize| {
+        let (start, mut last_len, mut last_change) = (std::time::Instant::now(), since, std::time::Instant::now());
+        while start.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(50));
+            let now = len();
+            if now != last_len { last_len = now; last_change = std::time::Instant::now(); }
+            if now > since && at_prompt() { return; }
+            if last_change.elapsed() > Duration::from_secs(2) { return; }
+        }
+    };
+
+    let mut writer = pair.master.take_writer()?;
+    wait(0);
+    let mut starts = Vec::new();
+    for chunk in chunks {
+        let out = output.lock().unwrap().clone();
+        starts.push(out.rfind('\n').map_or(0, |i| i + 1));
+        for line in chunk.lines().filter(|l| !l.trim().is_empty()) {
+            let before = len();
+            let _ = writer.write_all(format!("{line}\n").as_bytes());
+            wait(before);
+        }
+    }
+    let end = len();
+    let _ = writer.write_all(&[0x04]);
+    let exited = (0..50).any(|_| {
+        std::thread::sleep(Duration::from_millis(100));
+        matches!(child.try_wait(), Ok(Some(_)))
+    });
+    if !exited { let _ = child.kill(); }
+    drop(pair.master);
+
+    let out = output.lock().unwrap().clone();
+    let ends = starts.iter().skip(1).copied().chain([end]);
+    Ok(starts.iter().zip(ends).map(|(&a, b)| {
+        let part = out[a..b.max(a)].trim_end();
+        // drop the dangling prompt the next command would be typed at
+        let last = part.rsplit('\n').next().unwrap_or("");
+        let part = if prompts.iter().any(|p| strip_escapes(last).trim() == p.trim()) { &part[..part.len() - last.len()] } else { part };
+        part.trim_end().to_string()
+    }).collect())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::needs_stdin;
+    use super::{needs_stdin, run_session};
 
     #[test]
     fn detects_stdin() {
         assert!(needs_stdin("py", "n = int(input())"));
         assert!(!needs_stdin("py", "print('hi')"));
         assert!(needs_stdin("zzz", "anything"));
+    }
+
+    #[test]
+    fn session_splits_per_chunk() {
+        let argv: Vec<String> = ["env", "PS1=$ ", "HISTFILE=/dev/null", "BASH_SILENCE_DEPRECATION_WARNING=1", "bash", "--norc", "--noprofile", "-i"]
+            .map(String::from).to_vec();
+        let chunks = ["x=hi\nsleep 0.5; echo $x".to_string(), "echo bye".to_string()];
+        let outs = run_session(&argv, &["$ ".to_string()], &chunks, &std::env::temp_dir()).unwrap();
+        assert_eq!(outs.len(), 2);
+        assert!(outs[0].contains("$ x=hi") && outs[0].trim_end().ends_with("hi"), "{:?}", outs[0]);
+        assert!(outs[1].contains("$ echo bye") && outs[1].trim_end().ends_with("bye"), "{:?}", outs[1]);
     }
 }

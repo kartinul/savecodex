@@ -134,5 +134,54 @@
       "$(cat",
       "/dev/stdin"
     ]
+  },
+  "mysql": {
+    "session": true,
+    "reset": [
+      "mysql",
+      "-e",
+      "DROP DATABASE IF EXISTS lab{n}; CREATE DATABASE lab{n}"
+    ],
+    "run": [
+      "mysql",
+      "lab{n}"
+    ],
+    "prompts": [
+      "mysql> ",
+      "    -> ",
+      "    '> ",
+      "    \"> ",
+      "    `> ",
+      "   /*> "
+    ]
+  },
+  "shell": {
+    "session": true,
+    "run": [
+      "env",
+      "PS1=$ ",
+      "PS2=> ",
+      "HISTFILE=/dev/null",
+      "BASH_SILENCE_DEPRECATION_WARNING=1",
+      "bash",
+      "--norc",
+      "--noprofile",
+      "-i"
+    ],
+    "prompts": [
+      "$ ",
+      "> "
+    ]
+  },
+  "dot": {
+    "image": true,
+    "run": [
+      "dot",
+      "-Tpng",
+      "-Gdpi=150",
+      "{file}",
+      "-o",
+      "{dir}/{file_stem}.png"
+    ]
   }
 }

@@ -165,6 +165,7 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
         seed: None,
         banner: false,
         min_cols: 80,
+        no_title_bar: false,
         style,
         username,
         hostname,

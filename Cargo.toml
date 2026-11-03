@@ -61,3 +61,5 @@ docx-rs = "0.4"
 ignore = "0.4"
 natord = "1.0"
 tempfile = "3"
+base64 = "0.22"
+zip = { version = "8", default-features = false, features = ["deflate"] }
