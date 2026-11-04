@@ -68,6 +68,11 @@ struct Answer {
     files: Vec<NamedFile>,
     #[serde(default)]
     stdin: String,
+    #[serde(default)]
+    args: Vec<String>,
+    /// The error is what the question wants shown, so it isn't sent back for a fix.
+    #[serde(default)]
+    expects_error: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -297,15 +302,15 @@ async fn solve_group(
         if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
     }
 
-    let answers: Vec<(&Solved, usize, &Answer)> = solved.iter()
-        .flat_map(|q| q.answers.iter().enumerate().map(move |(i, a)| (q, i, a)))
-        .collect();
     // written before sessions run, so a session can compile or run another answer's file
     let mut names = HashSet::new();
     let mut file_names = Vec::new();
-    for (_, _, a) in &answers {
+    for a in solved.iter().flat_map(|q| &q.answers) {
         for f in &a.files {
-            std::fs::write(dir.join(Path::new(&f.name).file_name().context("bad file name")?), &f.code)?;
+            let rel = Path::new(&f.name);
+            if !rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) { bail!("bad file name {:?}", f.name) }
+            std::fs::create_dir_all(dir.join(rel).parent().unwrap_or(dir))?;
+            std::fs::write(dir.join(rel), &f.code)?;
         }
         let name = a.lang.as_deref()
             .filter(|l| configs.get(*l).is_some_and(|c| !c.session && !c.image))
@@ -316,40 +321,34 @@ async fn solve_group(
         file_names.push(name);
     }
 
-    // nothing between reset and cleanup returns early, so session state never outlives the group
     let ns = format!("sc{:06x}{n}_", *RUN_ID);
-    let session_langs: HashSet<&str> = group.setup.iter().map(|s| s.lang.as_str())
-        .chain(solved.iter().flat_map(|q| q.answers.iter().filter_map(|a| a.lang.as_deref())))
-        .filter(|l| configs.get(*l).is_some_and(|c| c.session))
+    let mut transcripts = run_group_sessions(n, &ns, group, &solved, configs, dir).await;
+    // a session error the question isn't about is the model's mistake: fix those answers once and rerun the group
+    let broken: Vec<(usize, usize, String)> = solved.iter().enumerate()
+        .flat_map(|(qi, q)| q.answers.iter().enumerate().map(move |(ai, a)| (qi, ai, a, q)))
+        .enumerate()
+        .filter(|(_, (_, _, a, q))| !a.expects_error && !q.answers.iter().any(|x| x.label.contains("(corrected)")))
+        .filter_map(|(idx, (qi, ai, _, _))| Some((qi, ai, transcripts.get(&idx)?.join("\n"))))
+        .filter(|(_, _, out)| session_failed(out))
         .collect();
-    for lang in &session_langs {
-        if let Some(reset) = &configs[*lang].reset {
-            if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(reset, &ns), "", dir).await {
-                tracing::warn!("[session {n}] {lang} reset failed: {e:#}");
-            }
-        }
-    }
-    if let Some(setup) = &group.setup {
-        match configs.get(&setup.lang).filter(|c| c.session) {
-            Some(cfg) => {
-                let code = if setup.lang == "mysql" { with_delimiters(&setup.code) } else { setup.code.clone() };
-                let code = crate::runner::namespaced(&code, &cfg.namespace, &ns);
-                if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(&cfg.run, &ns), &code, dir).await {
-                    tracing::warn!("[session {n}] setup failed: {e:#}");
+    if !broken.is_empty() {
+        for (qi, ai, out) in broken {
+            let a = &mut solved[qi].answers[ai];
+            tracing::warn!("[{}] session step failed, asking for a fix", a.label);
+            match ask(Tier::Mid, &[Part::Text(fix_prompt(&a.code, &out))], false).await {
+                Ok(fixed) => {
+                    a.code = strip_fences(&fixed).to_string();
+                    if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
                 }
-            }
-            None => tracing::warn!("[session {n}] setup language {} is not a session language, skipped", setup.lang),
-        }
-    }
-    let transcripts = run_sessions(&ns, &answers, configs, dir).await;
-    for lang in &session_langs {
-        if let Some(cleanup) = &configs[*lang].cleanup {
-            if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(cleanup, &ns), "", dir).await {
-                tracing::warn!("[session {n}] {lang} cleanup failed: {e:#}");
+                Err(e) => tracing::warn!("[{}] fix failed: {e:#}", a.label),
             }
         }
+        transcripts = run_group_sessions(n, &ns, group, &solved, configs, dir).await;
     }
 
+    let answers: Vec<(&Solved, usize, &Answer)> = solved.iter()
+        .flat_map(|q| q.answers.iter().enumerate().map(move |(i, a)| (q, i, a)))
+        .collect();
     let mut items = Vec::new();
     let group_code = answers.iter()
         .flat_map(|(_, _, a)| a.files.iter().map(|f| format!("{}:\n{}", f.name, f.code)).chain(Some(format!("{}:\n{}", a.label, a.code))))
@@ -407,16 +406,16 @@ async fn solve_group(
                     let filename = file_names[idx].clone().context("file answer wasn't written")?;
                     let path = dir.join(&filename);
                     let stdin = Some(&a.stdin).filter(|s| !s.is_empty()).map(String::as_str);
-                    let (mut cmd, mut out) = crate::pack::run_with_input(&path, dir, &filename, &a.code, stdin, None, opts.ai_input).await;
+                    let (mut cmd, mut out) = crate::pack::run_with_input(&path, dir, &filename, &a.code, stdin, &a.args, None, opts.ai_input).await;
                     // a failing given program is followed by its "(corrected)" answer, so only our own crashes are repaired
                     let has_correction = q.answers.iter().any(|x| x.label.contains("(corrected)"));
-                    if crashed(&out) && !has_correction {
+                    if crashed(&out) && !has_correction && !a.expects_error {
                         tracing::warn!("[{}] program crashed, asking for a fix", a.label);
                         match ask(Tier::Mid, &[Part::Text(fix_prompt(&a.code, &format!("$ {cmd}\n{out}")))], false).await {
                             Ok(fixed) => {
                                 let fixed = strip_fences(&fixed).to_string();
                                 std::fs::write(&path, &fixed)?;
-                                (cmd, out) = crate::pack::run_with_input(&path, dir, &filename, &fixed, stdin, None, opts.ai_input).await;
+                                (cmd, out) = crate::pack::run_with_input(&path, dir, &filename, &fixed, stdin, &a.args, None, opts.ai_input).await;
                                 item.content = fixed;
                             }
                             Err(e) => tracing::warn!("[{}] fix failed: {e:#}", a.label),
@@ -432,8 +431,9 @@ async fn solve_group(
         if output.as_deref().is_some_and(|out| shows_code(out, &a.code)) {
             item.content.clear();
         }
-        // models sometimes repeat the answer's own code as a file
-        let files: Vec<&NamedFile> = a.files.iter().filter(|f| f.code.trim() != a.code.trim()).collect();
+        // models sometimes repeat the answer's own code as a file; sample data (test.txt) is used but not shown
+        let is_code = |f: &&NamedFile| Path::new(&f.name).extension().and_then(|e| e.to_str()).is_some_and(|e| configs.contains_key(e));
+        let files: Vec<&NamedFile> = a.files.iter().filter(|f| f.code.trim() != a.code.trim()).filter(is_code).collect();
         if !files.is_empty() {
             let named = files.len() > 1;
             let files = files.iter().map(|f| if named { format!("{}:\n{}", f.name, f.code) } else { f.code.clone() });
@@ -463,6 +463,51 @@ async fn solve_group(
         items.push((item, Status::Failed, q.label.clone(), q.title.clone()));
     }
     Ok(items)
+}
+
+/// Reset, set up and run every session of the group, then clean up; nothing in between returns
+/// early, so session state never outlives the group. Returns each answer's step transcripts by answer index.
+async fn run_group_sessions(n: usize, ns: &str, group: &Group, solved: &[Solved], configs: &HashMap<String, LangConfig>, dir: &Path) -> HashMap<usize, Vec<String>> {
+    let answers: Vec<(&Solved, usize, &Answer)> = solved.iter()
+        .flat_map(|q| q.answers.iter().enumerate().map(move |(i, a)| (q, i, a)))
+        .collect();
+    let session_langs: HashSet<&str> = group.setup.iter().map(|s| s.lang.as_str())
+        .chain(solved.iter().flat_map(|q| q.answers.iter().filter_map(|a| a.lang.as_deref())))
+        .filter(|l| configs.get(*l).is_some_and(|c| c.session))
+        .collect();
+    for lang in &session_langs {
+        if let Some(reset) = &configs[*lang].reset {
+            if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(reset, ns), "", dir).await {
+                tracing::warn!("[session {n}] {lang} reset failed: {e:#}");
+            }
+        }
+    }
+    if let Some(setup) = &group.setup {
+        match configs.get(&setup.lang).filter(|c| c.session) {
+            Some(cfg) => {
+                let code = if setup.lang == "mysql" { with_delimiters(&setup.code) } else { setup.code.clone() };
+                let code = crate::runner::namespaced(&code, &cfg.namespace, ns);
+                if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(&cfg.run, ns), &code, dir).await {
+                    tracing::warn!("[session {n}] setup failed: {e:#}");
+                }
+            }
+            None => tracing::warn!("[session {n}] setup language {} is not a session language, skipped", setup.lang),
+        }
+    }
+    let transcripts = run_sessions(ns, &answers, configs, dir).await;
+    for lang in &session_langs {
+        if let Some(cleanup) = &configs[*lang].cleanup {
+            if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(cleanup, ns), "", dir).await {
+                tracing::warn!("[session {n}] {lang} cleanup failed: {e:#}");
+            }
+        }
+    }
+    transcripts
+}
+
+/// A failed command or statement, leaving out MySQL's SIGNAL SQLSTATE '45000', which is always raised on purpose.
+fn session_failed(out: &str) -> bool {
+    crashed(out) || out.lines().any(|l| l.starts_with("ERROR ") && l.contains("): ") && !l.contains("(45000)"))
 }
 
 fn answered_titles(solved: &[Solved]) -> HashSet<String> {
@@ -534,10 +579,24 @@ fn crashed(out: &str) -> bool {
 }
 
 /// MySQL ends a statement at the first `;`, so a trigger, procedure or function body typed without
-/// `DELIMITER` breaks apart. Wraps each such statement, from its `CREATE` to the `END;` closing it.
+/// `DELIMITER` breaks apart. Wraps each such statement, from its `CREATE` to the `END;` closing it,
+/// after undoing the model's own delimiters, which it sometimes gets half right (`$$` without `DELIMITER $$`).
 fn with_delimiters(code: &str) -> String {
-    if code.to_uppercase().contains("DELIMITER") { return code.to_string() }
-    let lines: Vec<&str> = code.lines().collect();
+    let is_delimiter_cmd = |l: &str| l.trim().to_uppercase().starts_with("DELIMITER ");
+    let delims: Vec<String> = code.lines().filter(|l| is_delimiter_cmd(l)).map(|l| l.trim()[10..].trim().to_string())
+        .filter(|d| d != ";").chain(["$$".to_string()]).collect();
+    let mut plain: Vec<String> = Vec::new();
+    for line in code.lines().filter(|l| !is_delimiter_cmd(l)) {
+        let line = line.trim_end();
+        match delims.iter().find(|d| line.ends_with(d.as_str())) {
+            Some(d) if line.trim() == d => {
+                if let Some(prev) = plain.last_mut().filter(|p| !p.ends_with(';')) { prev.push(';') }
+            }
+            Some(d) => plain.push(format!("{};", line[..line.len() - d.len()].trim_end())),
+            None => plain.push(line.to_string()),
+        }
+    }
+    let lines: Vec<&str> = plain.iter().map(String::as_str).collect();
     let (mut out, mut in_body) = (Vec::new(), false);
     for (i, line) in lines.iter().enumerate() {
         let upper = line.trim().to_uppercase();
@@ -611,11 +670,13 @@ fn assign_labels(groups: &mut [Group]) {
 /// The model's label rebuilt on the question's own (`Q2a`, `2-a` → `2(a)`), keeping a part and a
 /// " (corrected)" suffix, so headings and file names follow one style.
 fn heading(base: &str, label: &str) -> String {
+    let (label, corrected) = label.strip_suffix(" (corrected)").map_or((label, ""), |l| (l, " (corrected)"));
     let rest = label.find(base).map_or("", |i| &label[i + base.len()..]);
-    if base.ends_with(|c: char| c.is_ascii_digit()) && rest.starts_with(|c: char| c.is_ascii_digit()) { return base.to_string() }
-    let rest = rest.trim_start_matches(['-', '.', '_']);
-    let part = rest.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(rest.len());
-    if part > 0 { format!("{base}({}){}", &rest[..part], &rest[part..]) } else { format!("{base}{rest}") }
+    if base.ends_with(|c: char| c.is_ascii_digit()) && rest.starts_with(|c: char| c.is_ascii_digit()) { return format!("{base}{corrected}") }
+    // only part markers (a, 2, ii) are kept, so "6 (Scenario A)" and "4 1" read 6(A) and 4(1)
+    let marker = |t: &&str| t.len() == 1 || t.chars().all(|c| c.is_ascii_digit()) || t.chars().all(|c| "ivxIVX".contains(c));
+    let parts: String = rest.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).filter(marker).map(|t| format!("({t})")).collect();
+    format!("{base}{parts}{corrected}")
 }
 
 fn normalized(text: &str) -> String {
@@ -718,7 +779,13 @@ async fn ask_json<T: DeserializeOwned>(tier: Tier, parts: &[Part]) -> Result<T> 
 /// Parse the JSON object or array in a model reply, ignoring markdown fences or chatter around it.
 fn parse_json<T: DeserializeOwned>(text: &str) -> Result<T> {
     let end = text.rfind(['}', ']']).context("no JSON in reply")?;
-    let first = |json: &str| serde_json::Deserializer::from_str(json).into_iter::<T>().next().context("no JSON in reply")?.map_err(anyhow::Error::from);
+    let first = |json: &str| {
+        let mut values = serde_json::Deserializer::from_str(json).into_iter::<T>();
+        let value = values.next().context("no JSON in reply")??;
+        // a value followed by `,` `]` `}` sits inside a bigger one (`"files":[]` reads as no answers)
+        if json[values.byte_offset()..].trim_start().starts_with([',', ']', '}', ':']) { bail!("JSON nested in a reply that doesn't parse") }
+        Ok(value)
+    };
     let mut first_err = None;
     // reasoning before the JSON can mention brackets too, so try each opening one
     for (start, _) in text.match_indices(['{', '[']).take_while(|(i, _)| *i < end).take(30) {

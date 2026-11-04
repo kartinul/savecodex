@@ -93,15 +93,10 @@ pub fn generate_docx(
             }
         }
         for shot in &item.shots {
-            // Scale to fit on a standard page width (approx 600 pixels)
-            // docx-rs 0.4 uses EMUs for image dimensions (1 pixel ≈ 9525 EMUs)
-            let display_w = 600 * 9525;
-            let display_h = if shot.width > 0 {
-                (600.0 * (shot.height as f64 / shot.width as f64) * 9525.0) as u32
-            } else {
-                600 * 9525
-            };
-            let pic = Pic::new(&shot.bytes).size(display_w, display_h);
+            // fit a 600x520 px box (the tallest terminal shot) without enlarging; 1 px = 9525 EMU
+            let (w, h) = (shot.width.max(1) as f64, shot.height.max(1) as f64);
+            let scale = (600.0 / w).min(520.0 / h).min(1.0) * 9525.0;
+            let pic = Pic::new(&shot.bytes).size((w * scale) as u32, (h * scale) as u32);
             let img_run = Run::new()
                 .add_break(BreakType::TextWrapping) // new line before image
                 .add_image(pic);

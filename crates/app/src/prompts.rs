@@ -37,7 +37,7 @@ pub fn solve_prompt(group_json: &str, earlier: &str, langs: &str) -> String {
         format!("\n\nEarlier questions of this group are already answered, and their sessions ran first. Continue from them; don't repeat them or their commands:\n{earlier}")
     };
     format!(r#"Complete these tasks. Return ONLY this JSON, no markdown, one entry per question in order:
-[{{"title":"<question title>","answers":[{{"label":"<label>","lang":"<language or null>","code":"<code>","answer":"","answer_after_run":false,"files":[],"stdin":""}}]}}]
+[{{"title":"<question title>","answers":[{{"label":"<label>","lang":"<language or null>","code":"<code>","answer":"","answer_after_run":false,"files":[],"stdin":"","args":[],"expects_error":false}}]}}]
 
 Languages:
 {langs}
@@ -45,19 +45,20 @@ Languages:
 
 Rules:
 - title: the question's title exactly as given.
-- label: the question's label exactly as given, plus the part in brackets for an answer that covers one part (label 2, part b → 2(b)). A corrected version of a failing answer adds " (corrected)". No other words.
+- label: the question's label exactly as given, plus the part's own marker in brackets for an answer that covers one part (label 2, part b → 2(b); Scenario A → 2(A)). A corrected version of a failing answer adds " (corrected)". No other words.
 - Write only what the question asks for. No extra features, menus, validation, helper code, comments or options it didn't ask for or give. Clean code, consistent indentation, clear names.
-- One answer per thing to show. A program usually covers all parts of its question; split only when the parts are separate programs. Session languages and answers that don't run get one answer per part.
+- One answer per thing to show. A program usually covers all parts of its question; split only when the parts are separate programs. Session languages and answers that don't run get one answer per part. A question gets either one answer for all of it or one per part, never both.
 - lang: the language the question names, else the one that fits. Anything a person does by hand rather than runs (editor keystrokes, GUI steps, theory) is null: answer holds just the keys, commands or explanation, one answer per part.
 - Every output becomes a screenshot, so keep it short: small realistic sample data, only the files the task needs, no commands that print hundreds of lines. When a task works on existing files or data, create a few small samples first so the run shows real results.
 - Session code is exactly what a person would type, one statement or command per line, no comments. Each blank-line-separated step becomes its own screenshot, so a part is usually one step. The group's setup has already run: never repeat it. Consecutive session answers in a group share one live session, so later answers continue where earlier ones stopped: don't undo what a later answer needs and don't repeat earlier commands.
-- files: files the task asks you to write that a session answer then uses, as [{{"name":"<file name>","code":"<code>"}}]. They are saved in the working directory before the session runs and shown above it.
+- files: files the task asks you to write that a session answer then uses, and sample data a program reads, as [{{"name":"<file name>","code":"<code>"}}]. They are saved in the working directory before anything runs; a name with a folder (docs/a.txt) creates that folder. Code files are shown above the answer, data files are not.
 - File answers are saved in the working directory as the label lowercased without punctuation plus the extension (label 2(b) → q2b.<ext>). A session in the same group that uses one types that exact name and builds it itself; the file answer is then only shown, not run on its own, so put the commands that show that question's output in a session answer under that same question.
-- A program is complete, exercises everything the question asks for, and reads stdin when the question needs user input. stdin: the exact input typed into it, in the order it reads, or "".
+- A program is complete, exercises everything the question asks for, and reads stdin when the question needs user input. stdin: the exact input typed into it, in the order it reads, or "". Read each input once: stdin ends after its last line, so never loop asking again after invalid input. args: the command-line arguments it runs with, or [].
 - One run shows every case the question is about (found and not found, valid and invalid input, the error raised and handled), with realistic values. Give a program the input or arguments it is about; never fall back to made-up defaults.
 - Name anything a later step refers to.
 - Write files only in the working directory with relative paths.
-- Code given in the question to run, test or analyse is used verbatim; if it fails, that failure is part of the answer and a corrected version follows as another answer.
+- expects_error: true only when the error is what the question wants shown (given code that fails, an invalid case it asks to demonstrate). Any other error is taken as your mistake and sent back to be fixed.
+- Code given in the question to run, test, analyse or correct is used verbatim with expects_error true; if it fails, a corrected version follows as another answer. Whether given code works and what is wrong with it is answer_after_run, never answer.
 - Most answers have answer "" and answer_after_run false. Never describe the code, the steps or the output unless the question asks for it.
 - answer: shown below the screenshot. Only when the task asks to explain, compare, identify, justify, list or write something that doesn't depend on the output (an essay, report or email goes here). Plain text only, no markdown. Never put code here. Otherwise "".
 - answer_after_run: true only when the question asks for something that depends on the actual output (observe the behaviour, compare counts, analyse the output). It is written after the run and shown below the screenshot; don't repeat it in answer.

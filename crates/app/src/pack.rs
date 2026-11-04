@@ -179,7 +179,7 @@ async fn process_file(
 
     let content = fs::read_to_string(path).context("Failed to read file")?;
     let t0 = std::time::Instant::now();
-    let (cmd, out) = run_with_input(path, folder, &filename, &content, None, ai_config, ai_input).await;
+    let (cmd, out) = run_with_input(path, folder, &filename, &content, None, &[], ai_config, ai_input).await;
     let shot = screenshot(Some(&cmd), &out, opts, trim)?;
     info!("[{}/{}] Done: {} ({:.1}s)", idx + 1, total, filename, t0.elapsed().as_secs_f32());
 
@@ -193,6 +193,7 @@ pub async fn run_with_input(
     filename: &str,
     content: &str,
     given_input: Option<&str>,
+    args: &[String],
     ai_config: Option<&crate::ai::AiConfig>,
     ai_input: AiInput,
 ) -> (String, String) {
@@ -223,7 +224,7 @@ pub async fn run_with_input(
 
     tracing::debug!("[{}] Running via PTY (cwd: {})", filename, folder.display());
     let _slot = RUN_SLOTS.acquire().await.expect("semaphore closed");
-    match crate::runner::run_file_in(path, if input_text.is_empty() { None } else { Some(&input_text) }, Some(folder)).await {
+    match crate::runner::run_file_in(path, if input_text.is_empty() { None } else { Some(&input_text) }, args, Some(folder)).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("[{}] Run failed: {}", filename, e);

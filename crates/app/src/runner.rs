@@ -299,7 +299,7 @@ fn sandbox_env(work_dir: &Path) -> Vec<(String, String)> {
 
 /// Run a single file. Commands execute from the file's parent directory.
 pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, String)> {
-    run_file_in(file, input_text, None).await
+    run_file_in(file, input_text, &[], None).await
 }
 
 /// Run a single file, executing all commands from `work_dir` (the packed folder).
@@ -307,6 +307,7 @@ pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, 
 pub async fn run_file_in(
     file: &Path,
     input_text: Option<&str>,
+    args: &[String],
     work_dir: Option<&Path>,
 ) -> Result<(String, String)> {
     tracing::debug!("run_file_in called for: {:?} (work_dir: {:?})", file, work_dir);
@@ -342,7 +343,8 @@ pub async fn run_file_in(
         }
     }
     
-    let run_args = replace_vars(&config.run, file, &work_dir);
+    let mut run_args = replace_vars(&config.run, file, &work_dir);
+    run_args.extend_from_slice(args);
     if run_args.is_empty() { bail!("Empty run command"); }
     let executed_cmd = match &build_args {
         Some(build) => {

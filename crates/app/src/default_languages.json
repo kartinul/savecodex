@@ -135,7 +135,7 @@
       "$(cat",
       "/dev/stdin"
     ],
-    "hint": "A script run on its own with no arguments (one that needs arguments or other programs is a shell answer). Start with #!/bin/bash. In bc, use scale=6 or more and ^ for integer powers, rounding only when printing. Strip wc's padding (wc -l < file | tr -d ' '). Script files in shell answers follow these rules too."
+    "hint": "A script run on its own; its arguments go in args. One that needs other programs running is a shell answer. Start with #!/bin/bash. In bc, use scale=6 or more and ^ for integer powers, rounding only when printing. Strip wc's padding (wc -l < file | tr -d ' '). Script files in shell answers follow these rules too."
   },
   "mysql": {
     "session": true,
@@ -167,7 +167,7 @@
       "    `> ",
       "   /*> "
     ],
-    "hint": "SQL (MySQL 8; emulate unsupported features such as FULL OUTER JOIN and say so in answer). Each group starts in a fresh empty database: CREATE DATABASE and USE only when the question names a database to create, with that name. Use DELIMITER $$ for procedures and triggers, and DROP ... IF EXISTS before creating one. Show structure with DESC; end SHOW CREATE TABLE with \\G. No transactions or ROLLBACK unless the question asks. Name every constraint a later statement refers to."
+    "hint": "SQL (MySQL 8; emulate unsupported features such as FULL OUTER JOIN and say so in answer). Each group starts in a fresh empty database: CREATE DATABASE and USE only when the question names a database to create, with that name. Write procedures and triggers with plain ; (DELIMITER is added automatically), and DROP ... IF EXISTS before creating one. MySQL syntax only: no WHEN clause on triggers, OLD only in UPDATE and DELETE triggers, NEW only in INSERT and UPDATE. Create every table an answer uses that the setup or an earlier answer didn't, with a few rows, before using it. Show structure with DESC; end SHOW CREATE TABLE with \\G. No transactions or ROLLBACK unless the question asks. Name every constraint a later statement refers to."
   },
   "shell": {
     "session": true,
@@ -187,7 +187,7 @@
       "$ ",
       "> "
     ],
-    "hint": "Commands typed at a terminal. A script is a files entry, never typed at the prompt or created with cat, echo or heredocs; code holds only the commands that use it (chmod +x, running it with real arguments). When a command reads input, type the input on the next lines instead of piping it. To signal a process, start it in the background, sleep 1, then use $!. Never use commands that don't return (top, watch, tail -f, editors)."
+    "hint": "Commands typed at a terminal. A script is a files entry, never typed at the prompt or created with cat, echo or heredocs; code holds only the commands that use it (chmod +x, running it with real arguments). When a command reads input, type the input on the next lines instead of piping it. A question that writes a program and then signals or inspects it (kill, ps, /proc) is one shell answer: build and start it in the background with &, sleep 1, then use $!. A program that runs until killed is never run on its own. Never use commands that don't return (top, watch, tail -f, editors)."
   },
   "dot": {
     "image": true,
@@ -195,12 +195,13 @@
       "dot",
       "-Tpng",
       "-Gdpi=150",
+      "-Gsize=6,5",
       "{file}",
       "-o",
       "{dir}/{file_stem}.png"
     ],
     "hide_code": true,
-    "hint": "Diagrams: ER, EER, schema, UML, flowcharts. A question that asks to draw, design or update a diagram always gets one. ER in Chen notation: entity box, weak entity peripheries=2, attribute ellipse, key attribute underlined with an HTML label, multivalued peripheries=2, derived style=dashed, relationship diamond, identifying relationship peripheries=2, cardinality as edge labels, total participation color=\"black:black\"; EER adds a small circle labelled d or o. For ER and EER use layout=neato, overlap=false, splines=true and keep the drawing about as tall as wide. Default font. Include every attribute and key the written answers mention."
+    "hint": "Diagrams: ER, EER, schema, UML, flowcharts. A question that asks to draw, design or update a diagram always gets one. ER in Chen notation: entity box, weak entity peripheries=2, attribute ellipse, key attribute underlined with an HTML label, multivalued peripheries=2, derived style=dashed, relationship diamond, identifying relationship peripheries=2, cardinality as edge labels, total participation color=\"black:black\"; EER adds a small circle labelled d or o. For ER and EER use layout=neato, overlap=false, splines=true and keep the drawing about as tall as wide. It is shrunk to fit 6x5 inches, so keep it compact: short labels, no padding, no huge graphs. Default font. Include every attribute and key the written answers mention."
   },
   "html": {
     "image": true,
