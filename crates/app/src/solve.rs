@@ -274,7 +274,12 @@ async fn solve_group(
             // models sometimes return the format example or a question nobody asked
             // models answer to the label they were shown (15) as often as to the title (Practice Q15)
             chunk_solved.retain_mut(|s| match todo.iter().find(|q| [&q.title, &q.label].iter().any(|t| normalized(t) == normalized(&s.title))) {
-                Some(q) => { s.title = q.title.clone(); true }
+                Some(q) => {
+                    s.title = q.title.clone();
+                    // an answer with nothing in it (no language, code or text) counts as no answer
+                    s.answers.retain(|a| a.lang.is_some() || !a.code.trim().is_empty() || !a.answer.trim().is_empty());
+                    !s.answers.is_empty()
+                }
                 None => {
                     tracing::warn!("[session {n}] dropped an answer to {:?}, which wasn't asked", s.title);
                     false
@@ -337,9 +342,15 @@ async fn solve_group(
         if broken.is_empty() { break }
         for (qi, ai, out) in broken {
             let q_text = group.questions.iter().find(|x| x.title == solved[qi].title).map(question_text).unwrap_or_default();
+            let lang = &solved[qi].answers[ai].lang;
+            let before = solved.iter().enumerate()
+                .flat_map(|(i, q)| q.answers.iter().enumerate().map(move |(j, x)| ((i, j), x)))
+                .take_while(|(pos, _)| *pos < (qi, ai))
+                .filter(|(_, x)| &x.lang == lang)
+                .map(|(_, x)| x.code.as_str()).collect::<Vec<_>>().join("\n\n");
             let a = &mut solved[qi].answers[ai];
             tracing::warn!("[{}] session step failed, asking for a fix ({round}/{FIXES})", a.label);
-            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, &a.code, &out))], false).await {
+            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, &before, &a.code, &out))], false).await {
                 Ok(fixed) => {
                     a.code = strip_fences(&fixed).to_string();
                     if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
@@ -426,7 +437,7 @@ async fn solve_group(
                         for attempt in 1..=FIXES {
                             if !exit_err && !crashed(&out) { break }
                             tracing::warn!("[{}] program failed, asking for a fix ({attempt}/{FIXES})", a.label);
-                            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, &code, &error))], false).await {
+                            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, "", &code, &error))], false).await {
                                 Ok(fixed) => {
                                     code = strip_fences(&fixed).to_string();
                                     std::fs::write(&path, &code)?;
@@ -587,7 +598,7 @@ async fn render_diagram(cfg: &LangConfig, dir: &Path, filename: &str, code: &str
             Err(e) => e,
         };
         tracing::warn!("[{filename}] render failed, asking for a fix ({attempt}/{FIXES}): {err:#}");
-        code = strip_fences(&ask(Tier::Mid, &[Part::Text(fix_prompt("", &code, &format!("{err:#}")))], false).await?).to_string();
+        code = strip_fences(&ask(Tier::Mid, &[Part::Text(fix_prompt("", "", &code, &format!("{err:#}")))], false).await?).to_string();
     }
     unreachable!()
 }
@@ -621,20 +632,23 @@ fn with_delimiters(code: &str) -> String {
         }
     }
     let lines: Vec<&str> = plain.iter().map(String::as_str).collect();
-    let (mut out, mut in_body) = (Vec::new(), false);
+    // body_end: the line a routine ends on; usize::MAX for a BEGIN body, which ends at its END;
+    let (mut out, mut body_end) = (Vec::new(), None);
     for (i, line) in lines.iter().enumerate() {
         let upper = line.trim().to_uppercase();
         let routine = upper.starts_with("CREATE ") && ["TRIGGER", "PROCEDURE", "FUNCTION"].iter().any(|k| upper.contains(k));
-        // a body opens with BEGIN before the first `;`; one without (SET NEW.x = 1;) needs no delimiter
+        // a body opens with BEGIN before the first `;`; one without (SET NEW.x = 1;) ends at that `;`
         let header_end = lines[i..].iter().position(|l| l.trim_end().ends_with(';')).map_or(lines.len(), |p| i + p + 1);
-        if !in_body && routine && lines[i..header_end].iter().any(|l| l.to_uppercase().contains("BEGIN")) {
+        if body_end.is_none() && routine {
             out.push("DELIMITER $$".to_string());
-            in_body = true;
+            let begin = lines[i..header_end].iter().any(|l| l.to_uppercase().contains("BEGIN"));
+            body_end = Some(if begin { usize::MAX } else { header_end - 1 });
         }
-        if in_body && (upper == "END;" || upper.ends_with(" END;")) {
+        let ends = body_end.is_some_and(|e| if e == usize::MAX { upper == "END;" || upper.ends_with(" END;") } else { i == e });
+        if ends {
             out.push(format!("{}$$", line.trim_end().trim_end_matches(';')));
             out.push("DELIMITER ;".to_string());
-            in_body = false;
+            body_end = None;
         } else {
             out.push(line.to_string());
         }
@@ -691,16 +705,25 @@ fn assign_labels(groups: &mut [Group]) {
     }
 }
 
-/// The model's label rebuilt on the question's own (`Q2a`, `2-a` → `2(a)`), keeping a part and a
-/// " (corrected)" suffix, so headings and file names follow one style.
+/// The model's dotted label on the question's own (`2.2` → `2(b)`, `2.1.3` → `2(a)(iii)`), keeping a
+/// " (corrected)" suffix, so every document numbers its parts the same way.
 fn heading(base: &str, label: &str) -> String {
     let (label, corrected) = label.strip_suffix(" (corrected)").map_or((label, ""), |l| (l, " (corrected)"));
-    let rest = label.find(base).map_or("", |i| &label[i + base.len()..]);
-    if base.ends_with(|c: char| c.is_ascii_digit()) && rest.starts_with(|c: char| c.is_ascii_digit()) { return format!("{base}{corrected}") }
-    // only part markers (a, 2, ii) are kept, so "6 (Scenario A)" and "4 1" read 6(A) and 4(1)
-    let marker = |t: &&str| t.len() == 1 || t.chars().all(|c| c.is_ascii_digit()) || t.chars().all(|c| "ivxIVX".contains(c));
-    let parts: String = rest.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).filter(marker).map(|t| format!("({t})")).collect();
+    let dotted = &label[label.find(|c: char| c.is_ascii_digit()).unwrap_or(label.len())..];
+    let parts: String = dotted.split('.').skip(1)
+        .map_while(|p| p.trim().parse::<usize>().ok().filter(|&n| n > 0))
+        .enumerate()
+        .map(|(depth, n)| format!("({})", if depth == 0 { letter(n) } else { roman(n) }))
+        .collect();
     format!("{base}{parts}{corrected}")
+}
+
+fn letter(n: usize) -> String {
+    (b'a'..=b'z').nth(n - 1).map_or(n.to_string(), |c| (c as char).to_string())
+}
+
+fn roman(n: usize) -> String {
+    ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"].get(n - 1).map_or(n.to_string(), |r| r.to_string())
 }
 
 fn normalized(text: &str) -> String {

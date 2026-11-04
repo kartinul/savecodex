@@ -45,14 +45,14 @@ Languages:
 
 Rules:
 - title: the question's title exactly as given.
-- label: the question's label exactly as given, plus the part's own marker in brackets for an answer that covers one part (label 2, part b → 2(b); Scenario A → 2(A)). A corrected version of a failing answer adds " (corrected)". No other words.
+- label: dotted numbers only: the number in the question's label (2 or Practice Q2 → 2; 1 if it has none), then the position of the part at each level, counted in order whatever markers the question uses (whole question 2 → 2; its second part → 2.2; that part's first sub-part → 2.2.1). A corrected version of a failing answer adds " (corrected)". No other words.
 - Write only what the question asks for. No extra features, menus, validation, helper code, comments or options it didn't ask for or give. Clean code, consistent indentation, clear names.
 - One answer per thing to show. A program usually covers all parts of its question; split only when the parts are separate programs. Session languages and answers that don't run get one answer per part. A question gets either one answer for all of it or one per part, never both.
 - lang: the language the question names, else the one that fits. Anything a person does by hand rather than runs (editor keystrokes, GUI steps, theory) is null: answer holds just the keys, commands or explanation, one answer per part.
 - Every output becomes a screenshot, so keep it short: small realistic sample data, only the files the task needs, no commands that print hundreds of lines. When a task works on existing files or data, create a few small samples first so the run shows real results.
 - Session code is exactly what a person would type, one statement or command per line, no comments. Each blank-line-separated step becomes its own screenshot, so a part is usually one step. The group's setup has already run: never repeat it. Consecutive session answers in a group share one live session, so later answers continue where earlier ones stopped: don't undo what a later answer needs and don't repeat earlier commands.
 - files: files the task asks you to write that a session answer then uses, and sample data a program reads, as [{{"name":"<file name>","code":"<code>"}}]. They are saved in the working directory before anything runs; a name with a folder (docs/a.txt) creates that folder. Code files are shown above the answer, data files are not.
-- File answers are saved in the working directory as the label lowercased without punctuation plus the extension (label 2(b) → q2b.<ext>). A session in the same group that uses one types that exact name and builds it itself; the file answer is then only shown, not run on its own, so put the commands that show that question's output in a session answer under that same question.
+- File answers are saved in the working directory as its heading lowercased without punctuation plus the extension, where parts become letters then roman numerals (label 2.2 → 2(b) → q2b.<ext>; 2.1.3 → q2aiii.<ext>). A session in the same group that uses one types that exact name and builds it itself; the file answer is then only shown, not run on its own, so put the commands that show that question's output in a session answer under that same question.
 - A program is complete, exercises everything the question asks for, and reads stdin when the question needs user input. stdin: the exact input typed into it, in the order it reads, or "". Read each input once: stdin ends after its last line, so never loop asking again after invalid input. args: the command-line arguments it runs with, or [].
 - One run shows every case the question is about (found and not found, valid and invalid input, the error raised and handled), with realistic values. Give a program the input or arguments it is about; never fall back to made-up defaults.
 - Name anything a later step refers to.
@@ -73,7 +73,10 @@ pub fn after_run_prompt(question: &str, code: &str, output: &str) -> String {
 }
 
 /// `solve`: fix an answer that failed to render or crashed when run.
-pub fn fix_prompt(question: &str, code: &str, error: &str) -> String {
+pub fn fix_prompt(question: &str, before: &str, code: &str, error: &str) -> String {
     let question = if question.is_empty() { String::new() } else { format!("Question:\n{question}\n\n") };
-    format!("{question}This code fails:\n{code}\n\nError:\n{error}\n\nFix the cause of the error so the code still does what it did. Keep every name it uses (files, tables, databases, variables) and invent none. Return ONLY the fixed, complete code, no markdown.")
+    let before = if before.is_empty() { String::new() } else {
+        format!("It runs in one live session right after these earlier steps, so everything they created already exists: never create it again.\n{before}\n\n")
+    };
+    format!("{question}{before}This code fails:\n{code}\n\nError:\n{error}\n\nFix the cause of the error so the code still does what it did. Keep every name it uses (files, tables, databases, variables) and invent none. Return ONLY the fixed, complete code, no markdown.")
 }

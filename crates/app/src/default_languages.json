@@ -122,7 +122,7 @@
       "Scanner",
       "Console"
     ],
-    "hint": "Runs as one file with `java File.java`, so declare the class with main first."
+    "hint": "Runs as one file with `java File.java`, so declare the class with main first. Name the public class like Main or what it does, never after the label (class 3 is not a Java name)."
   },
   "sh": {
     "run": [
@@ -135,7 +135,7 @@
       "$(cat",
       "/dev/stdin"
     ],
-    "hint": "A script run on its own; its arguments go in args. One that needs other programs running is a shell answer. Start with #!/bin/bash. In bc, use scale=6 or more and ^ for integer powers, rounding only when printing. Strip wc's padding (wc -l < file | tr -d ' '). Script files in shell answers follow these rules too."
+    "hint": "A script run on its own; its arguments go in args. stdin and args are real values that exist when it runs: never placeholders like <PID>, and paths are . or files the answer creates. One that needs other programs running is a shell answer. Start with #!/bin/bash. In bc, use scale=6 or more and ^ for integer powers, rounding only when printing. Strip wc's padding (wc -l < file | tr -d ' '). Script files in shell answers follow these rules too."
   },
   "mysql": {
     "session": true,
@@ -187,7 +187,7 @@
       "$ ",
       "> "
     ],
-    "hint": "Commands typed at a terminal. A script is a files entry, never typed at the prompt or created with cat, echo or heredocs; code holds only the commands that use it (chmod +x, running it with real arguments). When a command reads input, type the input on the next lines instead of piping it. A question that writes a program and then signals or inspects it (kill, ps, /proc) is one shell answer: build and start it in the background with &, sleep 1, then use $!. A program that runs until killed is never run on its own. Never use commands that don't return (top, watch, tail -f, editors)."
+    "hint": "Commands typed at a terminal. A script is a files entry, never typed at the prompt or created with cat, echo or heredocs; code holds only the commands that use it (chmod +x, running it with real arguments). When a command reads input, type the input on the next lines instead of piping it. A question that writes a program and then signals or inspects it (kill, ps, /proc) is one shell answer: build and start it in the background with &, sleep 1, then use $!. A program that runs until killed is never run on its own. Never use commands that don't return (top, watch, tail -f, editors). A cron job is installed with crontab and shown with crontab -l."
   },
   "dot": {
     "image": true,
