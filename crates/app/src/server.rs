@@ -17,8 +17,8 @@ use crate::{embed::Frontend, routes};
 /// Start the axum server on `host:port`.
 pub async fn start(host: &str, port: u16, no_key: bool) -> Result<()> {
     if no_key {
-        crate::ai::AiConfig::from_env("INPUT")?;
-        tracing::info!("No-key mode: using server env AI config");
+        crate::ai::resolve(crate::ai::Tier::Fast)?;
+        tracing::info!("No-key mode: everyone uses {}", crate::ai::describe(crate::ai::Tier::Fast));
     }
 
     let cors = CorsLayer::new()

@@ -9,6 +9,9 @@ use tokio::task::JoinSet;
 use tracing::info;
 use natord::compare;
 
+use crate::docx_gen::Shot;
+use crate::term_gen::TermGenOptions;
+
 // Builds are CPU-bound; running more than the CPU quota at once makes them hit the build timeout.
 static RUN_SLOTS: LazyLock<Semaphore> = LazyLock::new(|| {
     Semaphore::new(std::thread::available_parallelism().map_or(1, |n| n.get()))
@@ -174,11 +177,11 @@ async fn process_file(
 
     let content = fs::read_to_string(path).context("Failed to read file")?;
     let t0 = std::time::Instant::now();
-    let (cmd, out) = run_with_input(path, folder, &filename, &content, ai_config, ai_input).await;
-    let (img_bytes, img_width, img_height) = screenshot(Some(&cmd), &out, opts, trim)?;
+    let (cmd, out) = run_with_input(path, folder, &filename, &content, None, ai_config, ai_input).await;
+    let shot = screenshot(Some(&cmd), &out, opts, trim)?;
     info!("[{}/{}] Done: {} ({:.1}s)", idx + 1, total, filename, t0.elapsed().as_secs_f32());
 
-    Ok(crate::docx_gen::PackItem { filename, content, img_bytes, img_width, img_height, ..Default::default() })
+    Ok(crate::docx_gen::PackItem { filename, content, shots: vec![shot], ..Default::default() })
 }
 
 /// Ask the AI for stdin when the code reads input, then run it; failures become the output text.
@@ -187,6 +190,7 @@ pub async fn run_with_input(
     folder: &Path,
     filename: &str,
     content: &str,
+    given_input: Option<&str>,
     ai_config: Option<&crate::ai::AiConfig>,
     ai_input: AiInput,
 ) -> (String, String) {
@@ -196,7 +200,9 @@ pub async fn run_with_input(
         AiInput::Never => false,
         AiInput::Auto => crate::runner::needs_stdin(ext, content),
     };
-    let input_text = if !wants_ai {
+    let input_text = if let Some(given) = given_input {
+        given.to_string()
+    } else if !wants_ai {
         tracing::debug!("[{}] Skipping AI input", filename);
         String::new()
     } else {
@@ -225,7 +231,29 @@ pub async fn run_with_input(
 }
 
 /// Render output as a terminal PNG, with a `<prompt><cmd>` line on top when `cmd` is given.
-pub fn screenshot(cmd: Option<&str>, out: &str, opts: &crate::term_gen::TermGenOptions, trim: bool) -> Result<(Vec<u8>, u32, u32)> {
+pub fn screenshot(cmd: Option<&str>, out: &str, opts: &TermGenOptions, trim: bool) -> Result<Shot> {
+    render(&with_prompt(cmd, &clip(out, trim), opts), opts, trim)
+}
+
+/// Like `screenshot`, but long lines wrap at `WRAP_COLS` and tall output is split into
+/// pages of `PAGE_LINES`, like scrolling a real terminal; only the first page keeps the title bar.
+pub fn screenshots(cmd: Option<&str>, out: &str, opts: &TermGenOptions, trim: bool) -> Result<Vec<Shot>> {
+    const WRAP_COLS: usize = 100;
+    const PAGE_LINES: usize = 40;
+    let text = with_prompt(cmd, &clip(out, trim), opts);
+    let lines: Vec<String> = text.trim_end_matches('\n').split('\n').flat_map(|line| {
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() { vec![String::new()] } else { chars.chunks(WRAP_COLS).map(|c| c.iter().collect()).collect() }
+    }).collect();
+    lines.chunks(PAGE_LINES).enumerate().map(|(i, page)| {
+        let mut page_opts = opts.clone();
+        page_opts.no_title_bar |= i > 0;
+        render(&page.join("\n"), &page_opts, trim)
+    }).collect()
+}
+
+/// Cut runaway output down to a renderable size.
+fn clip(out: &str, trim: bool) -> String {
     let mut lines: Vec<&str> = out.split('\n').collect();
     // untrimmed still keeps a hard cap so a print loop can't blow up image memory
     let (max_lines, max_line_len) = if trim { (150, 200) } else { (1000, 300) };
@@ -247,14 +275,18 @@ pub fn screenshot(cmd: Option<&str>, out: &str, opts: &crate::term_gen::TermGenO
     if truncated {
         safe_out.push_str("\n... [output truncated due to length] ...\n");
     }
+    safe_out
+}
 
-    let fake_prompt = match cmd {
-        Some(cmd) if !opts.no_prompt_highlight => format!("{}{}\n", opts.prompt, cmd),
-        _ => String::new(),
-    };
-    let raw = format!("{}{}", fake_prompt, safe_out);
+fn with_prompt(cmd: Option<&str>, out: &str, opts: &TermGenOptions) -> String {
+    match cmd {
+        Some(cmd) if !opts.no_prompt_highlight => format!("{}{}\n{}", opts.prompt, cmd, out),
+        _ => out.to_string(),
+    }
+}
 
-    let mut img = crate::term_gen::generate_terminal_image(&raw, opts)?;
+fn render(raw: &str, opts: &TermGenOptions, trim: bool) -> Result<Shot> {
+    let mut img = crate::term_gen::generate_terminal_image(raw, opts)?;
     let max_w = 4000;
     let max_h = 10000;
     if trim && (img.width() > max_w || img.height() > max_h) {
@@ -262,8 +294,8 @@ pub fn screenshot(cmd: Option<&str>, out: &str, opts: &crate::term_gen::TermGenO
         let crop_h = img.height().min(max_h);
         img = image::imageops::crop(&mut img, 0, 0, crop_w, crop_h).to_image();
     }
-    let (img_width, img_height) = img.dimensions();
+    let (width, height) = img.dimensions();
     let mut img_buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut img_buf, image::ImageOutputFormat::Png)?;
-    Ok((img_buf.into_inner(), img_width, img_height))
+    Ok(Shot { bytes: img_buf.into_inner(), width, height })
 }

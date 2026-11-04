@@ -197,10 +197,6 @@ const Pack: FC = () => {
   const noKey = useNoKey();
   const [geminiApiKey, setGeminiApiKey] = useLocalStorage("savecodex_gemini_key", "");
 
-  const [aiProvider, setAiProvider] = useLocalStorage("savecodex_ai_provider", "gemini");
-  const [aiModel, setAiModel] = useLocalStorage("savecodex_ai_model", "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite");
-  const [aiBaseUrl, setAiBaseUrl] = useLocalStorage("savecodex_ai_base_url", "");
-
   const resetAdvanced = () => {
     setDocTitle("{}");
     setDocText("DOCX of: {}");
@@ -213,9 +209,6 @@ const Pack: FC = () => {
     setPageBreak(false);
     setAiInput("auto");
     setTrimOutput(true);
-    setAiProvider("gemini");
-    setAiModel("gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite");
-    setAiBaseUrl("");
   };
 
   const onFileChange = () => {
@@ -300,9 +293,6 @@ const Pack: FC = () => {
     } catch {
       form.append("admin_password", "");
     }
-    form.append("ai_provider", aiProvider);
-    form.append("ai_model", aiModel);
-    form.append("ai_base_url", aiBaseUrl);
 
     setLoading(true);
     try {
@@ -481,36 +471,6 @@ const Pack: FC = () => {
               <Button size="1" variant="soft" color="gray" onClick={resetAdvanced} type="button">Reset Defaults</Button>
             </Flex>
             <Grid columns="2" gap="3">
-              {!noKey && <>
-              <Box>
-                <Text as="div" size="2" mb="1">AI Provider</Text>
-                <Select.Root value={aiProvider} onValueChange={setAiProvider}>
-                  <Select.Trigger style={{ width: "100%" }} />
-                  <Select.Content>
-                    <Select.Item value="gemini">Gemini</Select.Item>
-                    <Select.Item value="openai_compatible">OpenAI Compatible</Select.Item>
-                  </Select.Content>
-                </Select.Root>
-              </Box>
-              <Box>
-                <Text as="div" size="2" mb="1">AI Model(s)</Text>
-                <TextField.Root
-                  placeholder="e.g. gemini-1.5-pro"
-                  value={aiModel}
-                  onChange={e => setAiModel(e.target.value)}
-                />
-              </Box>
-              {aiProvider === "openai_compatible" && (
-                <Box style={{ gridColumn: "span 2" }}>
-                  <Text as="div" size="2" mb="1">Base URL</Text>
-                  <TextField.Root
-                    placeholder="https://api.groq.com/openai/v1"
-                    value={aiBaseUrl}
-                    onChange={e => setAiBaseUrl(e.target.value)}
-                  />
-                </Box>
-              )}
-              </>}
               <Box>
                 <Text as="div" size="2" mb="1">Theme</Text>
                 <Select.Root value={theme} onValueChange={setTheme}>

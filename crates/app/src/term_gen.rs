@@ -477,7 +477,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
             stroke(&mut img, &[(ix, iy), (ix + 9.0 * u, iy), (ix + 9.0 * u, iy + 7.0 * u), (ix, iy + 7.0 * u), (ix, iy)], u, rgba(icon));
             stroke(&mut img, &[(ix, iy + 3.5 * u), (ix + 9.0 * u, iy + 3.5 * u)], u, rgba(icon));
 
-            round_corners(&mut img, 10.0 * u, true, rgba(if light { Rgb(180, 180, 180) } else { Rgb(81, 81, 81) }));
+            round_corners(&mut img, 10.0 * u, !opts.no_title_bar, rgba(if light { Rgb(180, 180, 180) } else { Rgb(81, 81, 81) }));
         }
         WindowStyle::Windows => {
             let (bar, tab, fg, dim, sep) = if light {
@@ -514,7 +514,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
             square(&mut img, w - 69.0 * u, cy, 5.0 * u, u, rgba(fg));
             cross(&mut img, w - 23.0 * u, cy, 5.0 * u, u, rgba(fg));
 
-            round_corners(&mut img, 8.0 * u, true, rgba(if light { Rgb(190, 190, 190) } else { Rgb(85, 85, 85) }));
+            round_corners(&mut img, 8.0 * u, !opts.no_title_bar, rgba(if light { Rgb(190, 190, 190) } else { Rgb(85, 85, 85) }));
         }
         WindowStyle::Ubuntu => {
             let (top, bottom) = ((87.0, 87.0, 79.0), (64.0, 63.0, 60.0));

@@ -55,7 +55,7 @@ savecodex pack lab5 -o "roll_{}" --doc-title "Assignment {}"
 | `--page-break` | off | Page break after each file |
 | `--ai-input` | `auto` | `auto`: only files with a stdin marker (`input(`, `scanf`, ...); `always`; `never` |
 | `--no-trim` | off | Keep long output (default trims to 150 lines × 200 chars; hard cap 1000 × 300) |
-| `-j, --jobs` | `15` | Files processed in parallel |
+| `-j, --jobs` | `15` | Files (`pack`) or question groups across all documents (`solve`) processed in parallel |
 
 Also takes `term`'s screenshot options (`--style`, `--theme`, `--username`, ...) except `--no-prompt`.
 Stdin markers are the `stdin` lists in `default_languages.json`; override them in your own `languages.json`.
@@ -116,12 +116,14 @@ Read from the shell or the first `.env` in the current directory or a parent. CL
 
 | Variable | Default | |
 |---|---|---|
-| `GEMINI_API_KEY` | none | Gemini key; also used for admin logins |
-| `ADMIN_PASSWORD` | none | Lets frontend users use the server's `GEMINI_API_KEY` |
-| `INPUT_PROVIDER` | `gemini` | `gemini` or `openai_compatible` |
-| `INPUT_MODEL` | `gemini-1.5-pro` | Comma-separated Gemini models fall back in order |
-| `INPUT_API_KEY`, `INPUT_BASE_URL` | none | Needed for `openai_compatible` |
-| `CODE_*` | same as `INPUT_*` | Same settings for `solve` |
+| `SMART_PROVIDER` | see below | AI for extracting questions in `solve` (once per run) |
+| `MID_PROVIDER` | `SMART_*` | AI for solving each question group |
+| `FAST_PROVIDER` | `MID_*` | AI for generating stdin (`pack`, `solve`) |
+| `{TIER}_MODEL` | per provider | Comma-separated Gemini models fall back in order |
+| `{TIER}_THINKING` | provider default (agents: `low` for FAST) | `off`, `low`, `medium`, `high`, `xhigh`. Sent as `reasoning_effort` (openai, ollama; dropped if rejected), Gemini `thinkingConfig`, `--effort` (claude) or `model_reasoning_effort` (codex); other agents ignore it |
+| `{TIER}_API_KEY`, `{TIER}_BASE_URL` | none | `{TIER}_BASE_URL` is needed for `openai`; Gemini falls back to `GEMINI_API_KEY` |
+| `GEMINI_API_KEY` | none | Used for Gemini; with no provider set it's the last fallback after agent CLIs |
+| `ADMIN_PASSWORD` | none | Lets frontend users use the server's AI config |
 | `SAVECODEX_NO_KEY` | off | `serve --no-key` |
 | `SAVECODEX_OUTPUT` | `<folder>_pack` | `pack -o` |
 | `SAVECODEX_EXT` | auto-detect | `pack --ext` |
@@ -130,5 +132,19 @@ Read from the shell or the first `.env` in the current directory or a parent. CL
 | `SAVECODEX_STYLE` | `windows` | `pack` / `term --style` |
 | `SAVECODEX_AI_INPUT` | `auto` | `pack --ai-input` |
 | `SAVECODEX_NO_TRIM` | off | `pack --no-trim` |
-| `SAVECODEX_JOBS` | `15` | `pack -j` |
+| `SAVECODEX_JOBS` | `15` | `pack` / `solve -j` |
+| `SAVECODEX_RETRIES` | `3` | `--retries`: retries for a failed AI call (5xx, 429, agent burst limits, replies that don't parse). Retried right away, except agent burst limits, which wait 5s, 10s, 20s, then 40s |
+| `SAVECODEX_AGENT_JOBS` | no limit | Extra cap on calls running at once per agent CLI (claude, codex, ...); otherwise `-j` decides |
 | `RUST_LOG` | `info` | Log level, e.g. `debug` |
+
+Providers: `gemini`, `openai` (any OpenAI-compatible API), `ollama` (local, `--local` uses it for every tier with the first installed model), and agent CLIs run in print mode: `claude`, `codex`, `gemini-cli`, `cursor`, `opencode`, `copilot`, `qwen`, `amp`, `antigravity` (`agy`). Every `*_PROVIDER` / `*_MODEL` also has a flag (`--smart-provider`, `--fast-model`, ...).
+
+With no provider set, the first agent CLI on `PATH` is used, in that order, then Gemini if `GEMINI_API_KEY` is set. If one fails (usage limit, not logged in, timeout), the next one takes over for the rest of the run. Default models:
+
+| Provider | SMART | MID | FAST |
+|---|---|---|---|
+| `gemini` | `gemini-3.6-flash` | `gemini-3.5-flash` | `gemini-3.5-flash-lite` |
+| `claude` | `opus` | `sonnet` | `haiku` (low effort) |
+| `codex` | CLI default | CLI default | CLI default (low effort) |
+| `gemini-cli` | `pro` | `flash` | `flash-lite` |
+| others | CLI default | CLI default | CLI default |

@@ -3,19 +3,22 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::ai::{ask_code, ask_code_json, Part};
-use crate::docx_gen::PackItem;
+use crate::ai::{ask, Part, Tier};
+use crate::docx_gen::{PackItem, Shot};
 use crate::pack::AiInput;
-use crate::prompts::{after_run_prompt, extract_prompt, fix_diagram_prompt, solve_prompt};
+use crate::prompts::{after_run_prompt, extract_prompt, fix_prompt, solve_prompt};
 use crate::runner::{load_configurations, LangConfig};
 use crate::term_gen::TermGenOptions;
 
 #[derive(Deserialize)]
-struct Sheet {
+struct Extracted {
+    #[serde(default)]
+    language: String,
     groups: Vec<Group>,
 }
 
@@ -42,13 +45,13 @@ struct Question {
     parts: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Solved {
     title: String,
     answers: Vec<Answer>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Answer {
     label: String,
     lang: Option<String>,
@@ -58,6 +61,16 @@ struct Answer {
     answer: String,
     #[serde(default)]
     answer_after_run: bool,
+    #[serde(default)]
+    files: Vec<NamedFile>,
+    #[serde(default)]
+    stdin: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct NamedFile {
+    name: String,
+    code: String,
 }
 
 pub struct SolveOptions {
@@ -71,7 +84,16 @@ pub struct SolveOptions {
     pub jobs: usize,
     pub questions: bool,
     pub max_pages: usize,
+    /// Shared by every document solved at once, so `jobs` caps them together.
+    pub sem: Arc<Semaphore>,
+    /// Prefix for progress lines when several documents run at once.
+    pub tag: String,
 }
+
+const QUESTIONS_PER_CALL: usize = 4;
+
+/// Session databases (`{n}`) must not collide across documents solved at once.
+static NEXT_SESSION_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// Everything read from the input files.
 #[derive(Default)]
@@ -86,55 +108,102 @@ enum Status {
     Done,
     NoScreenshot,
     Failed,
+    Empty,
 }
 
-pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<()> {
+/// Solves one assignment into a DOCX and returns its summary line.
+pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String> {
     let stem = inputs[0].file_stem().and_then(|s| s.to_str()).unwrap_or("solved").to_string();
+    let tag = if opts.tag.is_empty() { String::new() } else { format!("[{}] ", opts.tag) };
     let read = read_inputs(inputs, opts.max_pages)?;
-    let configs = load_configurations()?;
+    let mut configs = load_configurations()?;
+    configs.retain(|_, c| c.installed());
 
-    let model = crate::ai::AiConfig::from_env("CODE")?.model;
-    println!("🔍 Extracting questions with {} ({} image(s))…", model, read.images.len() / 2);
+    println!("{tag}🔍 Extracting questions with {} ({} image(s))…", crate::ai::describe(Tier::Smart), read.images.len() / 2);
     let mut parts = vec![Part::Text(extract_prompt(&read.text, &lang_names(&configs, |c| c.session)))];
     parts.extend(read.images);
-    let mut sheet: Sheet = ask_json(&parts).await.context("extracting questions")?;
-    for group in &mut sheet.groups {
+    let permit = opts.sem.acquire().await.expect("semaphore closed");
+    let mut extracted: Extracted = ask_json(Tier::Smart, &parts).await.context("extracting questions")?;
+    drop(permit);
+    for group in &mut extracted.groups {
         group.setup = group.setup.take().filter(|s| !s.code.trim().is_empty());
     }
-    let total: usize = sheet.groups.iter().map(|g| g.questions.len()).sum();
-    println!("📝 {} question(s) in {} group(s) — solving up to {} at a time", total, sheet.groups.len(), opts.jobs);
+    unify_titles(&mut extracted.groups);
+    let doc = normalized(&read.text);
+    let question_pos: HashMap<String, usize> = extracted.groups.iter().flat_map(|g| &g.questions)
+        .filter_map(|q| Some((q.title.clone(), title_pos(&doc, &q.title).or_else(|| text_pos(&doc, &q.text))?)))
+        .collect();
+    let total: usize = extracted.groups.iter().map(|g| g.questions.len()).sum();
+    let group_count = extracted.groups.len();
+    println!("{tag}📝 {} question(s) in {} group(s), solving with {}", total, group_count, crate::ai::describe(Tier::Mid));
 
     let work = tempfile::tempdir()?;
-    let langs = Arc::new(describe_langs(&configs));
+    let mut langs = describe_langs(&configs);
+    if !extracted.language.trim().is_empty() {
+        langs.push_str(&format!("\nThe document's programs are written in {}: use it for every program unless a question names another language.", extracted.language.trim()));
+    }
+    let langs = Arc::new(langs);
     let configs = Arc::new(configs);
     let data_files = Arc::new(read.data_files);
     let opts = Arc::new(opts);
-    let sem = Arc::new(Semaphore::new(opts.jobs.max(1)));
     let mut set = JoinSet::new();
-    for (n, group) in sheet.groups.into_iter().enumerate() {
+    for (n, group) in extracted.groups.into_iter().enumerate() {
         let dir = work.path().join(format!("g{}", n + 1));
-        let (configs, langs, data_files, opts, sem) = (configs.clone(), langs.clone(), data_files.clone(), opts.clone(), sem.clone());
+        let (configs, langs, data_files, opts, tag) = (configs.clone(), langs.clone(), data_files.clone(), opts.clone(), tag.clone());
         set.spawn(async move {
-            let _permit = sem.acquire().await.expect("semaphore closed");
+            tokio::time::sleep(std::time::Duration::from_millis(n as u64)).await;
+            let _permit = opts.sem.acquire().await.expect("semaphore closed");
             let titles = group.questions.iter().map(|q| q.title.clone()).collect::<Vec<_>>().join(", ");
-            let result = solve_group(n + 1, &group, &dir, &configs, &langs, &data_files, &opts).await;
+            let progress = format!("{tag}[{}/{group_count}]", n + 1);
+            tracing::info!("{progress} Solving: {titles}");
+            let started = std::time::Instant::now();
+            let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+            let result = solve_group(session_id, &group, &dir, &configs, &langs, &data_files, &opts).await;
+            let secs = started.elapsed().as_secs_f32();
+            match &result {
+                Ok(items) => {
+                    let failed = items.iter().filter(|(_, s, ..)| matches!(s, Status::Failed)).count();
+                    let failed = if failed > 0 { format!(", {failed} failed") } else { String::new() };
+                    tracing::info!("{progress} Done: {titles}, {} answer(s){failed} ({secs:.1}s)", items.len());
+                }
+                Err(e) => tracing::warn!("{progress} Failed: {titles} ({secs:.1}s): {e:#}"),
+            }
+            let first = group.questions.first().map(|q| q.title.clone()).unwrap_or_default();
             (n, result.unwrap_or_else(|e| {
-                tracing::warn!("group {} failed: {:#}", n + 1, e);
                 let item = PackItem { heading: Some(titles.clone()), answer: format!("[solve failed: {e:#}]"), ..Default::default() };
-                vec![(item, Status::Failed, titles)]
+                vec![(item, Status::Failed, titles, first)]
             }))
         });
     }
     let mut results: Vec<_> = set.join_all().await;
     results.sort_by_key(|(n, _)| *n);
+    let mut results: Vec<_> = results.into_iter().flat_map(|(_, r)| r).collect();
+    // groups can interleave (Q8 on its own between Q7 and Q9), so restore document order per question
+    if results.iter().all(|(.., title)| question_pos.contains_key(title)) {
+        results.sort_by_key(|(.., title)| question_pos[title]);
+    }
 
+    let short = results.iter().any(|(item, ..)| item.heading.as_deref().is_some_and(is_short_title));
+    if short {
+        for (item, ..) in &mut results {
+            if let Some(rest) = item.heading.as_deref().and_then(|h| h.strip_prefix("Question ")) { item.heading = Some(format!("Q{rest}")); }
+        }
+    }
     let mut items = Vec::new();
     let (mut done, mut failed, mut no_shot) = (0, Vec::new(), Vec::new());
-    for (item, status, label) in results.into_iter().flat_map(|(_, r)| r) {
+    let mut last_label: Option<String> = None;
+    for (mut item, status, label, _) in results {
         match status {
             Status::Done => done += 1,
             Status::NoScreenshot => no_shot.push(label),
             Status::Failed => failed.push(label),
+            Status::Empty => { failed.push(label); continue }
+        }
+        // a second answer to the same question continues under the first one's heading
+        if item.heading.is_some() && item.heading == last_label {
+            item.heading = Some(String::new());
+        } else {
+            last_label = item.heading.clone();
         }
         items.push(item);
     }
@@ -142,10 +211,10 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<()> {
     let out = opts.output.clone().unwrap_or_else(|| PathBuf::from(format!("{stem}_solved"))).with_extension("docx");
     let title = opts.doc_title.clone().unwrap_or(stem);
     crate::docx_gen::generate_docx(&out, &title, opts.doc_text.as_deref(), &items, opts.page_break)?;
-    println!("Done → {}", out.display());
-    println!("{} done, {} failed{}, {} without output{}", done,
-        failed.len(), list(&failed), no_shot.len(), list(&no_shot));
-    Ok(())
+    let summary = format!("{} done, {} failed{}, {} without output{} → {}", done,
+        failed.len(), list(&failed), no_shot.len(), list(&no_shot), out.display());
+    println!("{tag}Done: {summary}");
+    Ok(summary)
 }
 
 fn list(labels: &[String]) -> String {
@@ -160,13 +229,37 @@ async fn solve_group(
     langs: &str,
     data_files: &[PathBuf],
     opts: &SolveOptions,
-) -> Result<Vec<(PackItem, Status, String)>> {
+) -> Result<Vec<(PackItem, Status, String, String)>> {
     std::fs::create_dir_all(dir)?;
     for file in data_files {
         std::fs::copy(file, dir.join(file.file_name().context("bad data file name")?))?;
     }
-    let solved: Vec<Solved> = ask_json(&[Part::Text(solve_prompt(&serde_json::to_string_pretty(group)?, langs))]).await
-        .context("solving")?;
+    // big groups in one call outlast gateway timeouts, so they are solved a few questions at a time
+    let mut solved: Vec<Solved> = Vec::new();
+    for chunk in group.questions.chunks(QUESTIONS_PER_CALL) {
+        let mut todo: Vec<&Question> = chunk.iter().collect();
+        // models sometimes answer only some of the questions; ask once more for the rest
+        for _ in 0..2 {
+            let part = serde_json::to_string_pretty(&serde_json::json!({"setup": group.setup, "questions": todo}))?;
+            let earlier = if solved.is_empty() { String::new() } else { serde_json::to_string(&solved)? };
+            let chunk_solved: Vec<Solved> = ask_json(Tier::Mid, &[Part::Text(solve_prompt(&part, &earlier, langs))]).await
+                .context("solving")?;
+            let complete = chunk_solved.len() >= todo.len();
+            solved.extend(chunk_solved);
+            let answered = answered_titles(&solved);
+            todo.retain(|q| !answered.contains(&normalized(&q.title)));
+            if complete || todo.is_empty() { break }
+            tracing::warn!("[session {n}] no answer for {}, asking again", todo.iter().map(|q| q.title.as_str()).collect::<Vec<_>>().join(", "));
+        }
+    }
+    for a in solved.iter_mut().flat_map(|q| &mut q.answers) {
+        unescape_code(&mut a.code);
+        a.files.iter_mut().for_each(|f| unescape_code(&mut f.code));
+        if a.lang.as_deref().and_then(|l| configs.get(l)).is_some_and(|c| c.session) {
+            // `\G` already ends the statement, so a `;` after it runs an empty one ("No query specified")
+            a.code = a.code.replace("\\G;", "\\G");
+        }
+    }
 
     let session_langs: HashSet<&str> = group.setup.iter().map(|s| s.lang.as_str())
         .chain(solved.iter().flat_map(|q| q.answers.iter().filter_map(|a| a.lang.as_deref())))
@@ -175,7 +268,7 @@ async fn solve_group(
     for lang in &session_langs {
         if let Some(reset) = &configs[*lang].reset {
             if let Err(e) = crate::runner::run_piped(&crate::runner::with_group(reset, n), "", dir).await {
-                tracing::warn!("[group {n}] {lang} reset failed: {e:#}");
+                tracing::warn!("[session {n}] {lang} reset failed: {e:#}");
             }
         }
     }
@@ -184,19 +277,34 @@ async fn solve_group(
     if let Some(setup) = &group.setup {
         match configs.get(&setup.lang).filter(|c| c.session) {
             Some(cfg) => if let Err(e) = crate::runner::run_piped(&crate::runner::with_group(&cfg.run, n), &setup.code, dir).await {
-                tracing::warn!("[group {n}] setup failed: {e:#}");
+                tracing::warn!("[session {n}] setup failed: {e:#}");
             },
-            None => tracing::warn!("[group {n}] setup language {} is not a session language, skipped", setup.lang),
+            None => tracing::warn!("[session {n}] setup language {} is not a session language, skipped", setup.lang),
         }
-        let item = PackItem { heading: Some("Setup".into()), content: setup.code.clone(), ..Default::default() };
-        items.push((item, Status::Done, "Setup".into()));
     }
 
     let answers: Vec<(&Solved, usize, &Answer)> = solved.iter()
         .flat_map(|q| q.answers.iter().enumerate().map(move |(i, a)| (q, i, a)))
         .collect();
-    let transcripts = run_sessions(n, &answers, configs, dir).await;
+    // written before sessions run, so a session can compile or run another answer's file
     let mut names = HashSet::new();
+    let mut file_names = Vec::new();
+    for (_, _, a) in &answers {
+        for f in &a.files {
+            std::fs::write(dir.join(Path::new(&f.name).file_name().context("bad file name")?), &f.code)?;
+        }
+        let name = a.lang.as_deref()
+            .filter(|l| configs.get(*l).is_some_and(|c| !c.session && !c.image))
+            .map(|l| java_class(l, &a.code).filter(|n| names.insert(n.clone())).unwrap_or_else(|| unique_name(&a.label, l, &mut names)));
+        if let Some(name) = &name {
+            std::fs::write(dir.join(name), &a.code)?;
+        }
+        file_names.push(name);
+    }
+    let transcripts = run_sessions(n, &answers, configs, dir).await;
+    let group_code = answers.iter()
+        .flat_map(|(_, _, a)| a.files.iter().map(|f| format!("{}:\n{}", f.name, f.code)).chain(Some(format!("{}:\n{}", a.label, a.code))))
+        .collect::<Vec<_>>().join("\n\n");
 
     for (idx, (q, i, a)) in answers.iter().enumerate() {
         let question = group.questions.iter().find(|x| x.title == q.title);
@@ -210,7 +318,8 @@ async fn solve_group(
             ..Default::default()
         };
         let mut status = Status::Done;
-        let output = match a.lang.as_deref() {
+        // some models write the JSON null as the string "null"
+        let output = match a.lang.as_deref().filter(|l| !matches!(*l, "" | "null" | "none")) {
             None => None,
             Some(lang) => match configs.get(lang) {
                 None => {
@@ -222,50 +331,102 @@ async fn solve_group(
                     match render_diagram(cfg, dir, &unique_name(&a.label, lang, &mut names), &a.code).await {
                         Ok(png) => {
                             let img = image::load_from_memory(&png)?;
-                            (item.img_width, item.img_height) = (img.width(), img.height());
-                            item.img_bytes = png;
-                            item.content.clear();
+                            item.shots = vec![Shot { width: img.width(), height: img.height(), bytes: png }];
+                            if cfg.hide_code { item.content.clear(); }
                         }
                         Err(e) => {
-                            item.answer = format!("{}\n[diagram failed to render: {e:#}]", item.answer).trim().to_string();
+                            item.answer = format!("{}\n[failed to render: {e:#}]", item.answer).trim().to_string();
                             status = Status::NoScreenshot;
                         }
                     }
                     None
                 }
                 Some(cfg) if cfg.session => {
-                    let out = transcripts.get(&idx).cloned().unwrap_or_default();
-                    (item.img_bytes, item.img_width, item.img_height) = crate::pack::screenshot(None, &out, &term, opts.trim)?;
-                    Some(out)
+                    let steps = merge_short_steps(transcripts.get(&idx).cloned().unwrap_or_default());
+                    for (s, step) in steps.iter().enumerate() {
+                        let mut step_term = term.clone();
+                        step_term.no_title_bar |= s > 0;
+                        item.shots.extend(crate::pack::screenshots(None, &tidy_paths(step, dir), &step_term, opts.trim)?);
+                    }
+                    // typed at the prompt, so already in the screenshot (even when wrapped)
+                    item.content.clear();
+                    Some(tidy_paths(&steps.join("\n"), dir))
                 }
+                Some(_) if session_uses(&answers, configs, file_names[idx].as_deref()) => None,
                 Some(_) => {
-                    let filename = unique_name(&a.label, lang, &mut names);
+                    let filename = file_names[idx].clone().context("file answer wasn't written")?;
                     let path = dir.join(&filename);
-                    std::fs::write(&path, &a.code)?;
-                    let (cmd, out) = crate::pack::run_with_input(&path, dir, &filename, &a.code, None, opts.ai_input).await;
-                    (item.img_bytes, item.img_width, item.img_height) = crate::pack::screenshot(Some(&cmd), &out, &term, opts.trim)?;
+                    let stdin = Some(&a.stdin).filter(|s| !s.is_empty()).map(String::as_str);
+                    let (mut cmd, mut out) = crate::pack::run_with_input(&path, dir, &filename, &a.code, stdin, None, opts.ai_input).await;
+                    // a failing given program is followed by its "(corrected)" answer, so only our own crashes are repaired
+                    let has_correction = q.answers.iter().any(|x| x.label.contains("(corrected)"));
+                    if crashed(&out) && !has_correction {
+                        tracing::warn!("[{}] program crashed, asking for a fix", a.label);
+                        match ask(Tier::Mid, &[Part::Text(fix_prompt(&a.code, &out))], false).await {
+                            Ok(fixed) => {
+                                let fixed = strip_fences(&fixed).to_string();
+                                std::fs::write(&path, &fixed)?;
+                                (cmd, out) = crate::pack::run_with_input(&path, dir, &filename, &fixed, stdin, None, opts.ai_input).await;
+                                item.content = fixed;
+                            }
+                            Err(e) => tracing::warn!("[{}] fix failed: {e:#}", a.label),
+                        }
+                    }
+                    let out = tidy_paths(&out, dir);
+                    item.shots = crate::pack::screenshots(Some(&cmd), &out, &term, opts.trim)?;
                     Some(out)
                 }
             },
         };
+        // code already visible in the screenshot (typed at a prompt, cat'ed) isn't repeated above it
+        if output.as_deref().is_some_and(|out| shows_code(out, &a.code)) {
+            item.content.clear();
+        }
+        if !a.files.is_empty() {
+            let named = a.files.len() > 1;
+            let files = a.files.iter().map(|f| if named { format!("{}:\n{}", f.name, f.code) } else { f.code.clone() });
+            item.content = files.chain(Some(item.content.clone()).filter(|c| !c.is_empty())).collect::<Vec<_>>().join("\n\n");
+        }
         if let (true, Some(out)) = (a.answer_after_run, &output) {
             let q_text = question.map(question_text).unwrap_or_default();
-            match ask_code(&[Part::Text(after_run_prompt(&q_text, &a.code, out))]).await {
-                Ok(text) => item.answer = text.trim().to_string(),
+            match ask(Tier::Mid, &[Part::Text(after_run_prompt(&q_text, &group_code, out))], false).await {
+                Ok(text) => {
+                    item.answer_after = text.trim().to_string();
+                    // both end up below the screenshot, and the after-run text already answers it
+                    item.answer.clear();
+                }
                 Err(e) => tracing::warn!("[{}] written answer failed: {e:#}", a.label),
             }
         }
-        if item.content.is_empty() && item.answer.is_empty() && item.img_bytes.is_empty() {
-            status = Status::Failed;
+        if item.content.is_empty() && item.answer.is_empty() && item.answer_after.is_empty() && item.shots.is_empty() {
+            tracing::warn!("[{}] nothing to show (lang {:?}, {} code lines, {} files, {} session steps), left out",
+                a.label, a.lang, a.code.lines().count(), a.files.len(), transcripts.get(&idx).map_or(0, Vec::len));
+            status = Status::Empty;
         }
-        items.push((item, status, a.label.clone()));
+        items.push((item, status, a.label.clone(), q.title.clone()));
+    }
+    let answered = answered_titles(&solved);
+    for q in group.questions.iter().filter(|q| !answered.contains(&normalized(&q.title))) {
+        let item = PackItem { heading: Some(q.title.clone()), answer: "[solve failed: the model gave no answer]".into(), ..Default::default() };
+        items.push((item, Status::Failed, q.title.clone(), q.title.clone()));
     }
     Ok(items)
 }
 
+fn answered_titles(solved: &[Solved]) -> HashSet<String> {
+    solved.iter().map(|s| normalized(&s.title)).collect()
+}
+
+/// A session in the group compiles or runs this file answer itself, so it is only shown.
+fn session_uses(answers: &[(&Solved, usize, &Answer)], configs: &HashMap<String, LangConfig>, file: Option<&str>) -> bool {
+    let Some(file) = file else { return false };
+    answers.iter().any(|(_, _, a)| a.lang.as_deref().and_then(|l| configs.get(l)).is_some_and(|c| c.session) && a.code.contains(file))
+}
+
 /// Runs each stretch of consecutive answers in the same session language as one session,
-/// so state (tables, variables, cwd) carries over. Returns transcripts by answer index.
-async fn run_sessions(n: usize, answers: &[(&Solved, usize, &Answer)], configs: &HashMap<String, LangConfig>, dir: &Path) -> HashMap<usize, String> {
+/// so state (tables, variables, cwd) carries over. Blank lines split an answer into steps.
+/// Returns each answer's step transcripts by answer index.
+async fn run_sessions(n: usize, answers: &[(&Solved, usize, &Answer)], configs: &HashMap<String, LangConfig>, dir: &Path) -> HashMap<usize, Vec<String>> {
     let session_of = |a: &Answer| a.lang.as_deref().filter(|l| configs.get(*l).is_some_and(|c| c.session)).map(str::to_string);
     let mut transcripts = HashMap::new();
     let mut idx = 0;
@@ -275,18 +436,24 @@ async fn run_sessions(n: usize, answers: &[(&Solved, usize, &Answer)], configs: 
         idx += batch.len();
         let cfg = &configs[&lang];
         let (argv, prompts, dir) = (crate::runner::with_group(&cfg.run, n), cfg.prompts.clone(), dir.to_path_buf());
-        let chunks: Vec<String> = batch.iter().map(|&j| answers[j].2.code.clone()).collect();
+        let steps: Vec<(usize, String)> = batch.iter()
+            .flat_map(|&j| steps_of(&answers[j].2.code).into_iter().map(move |step| (j, step)))
+            .collect();
+        let chunks: Vec<String> = steps.iter().map(|(_, step)| step.clone()).collect();
         let result = tokio::task::spawn_blocking(move || crate::runner::run_session(&argv, &prompts, &chunks, &dir)).await;
-        match result {
-            Ok(Ok(outs)) => transcripts.extend(batch.into_iter().zip(outs)),
-            Ok(Err(e)) => transcripts.extend(batch.into_iter().map(|j| (j, format!("[Error starting {lang}: {e:#}]")))),
-            Err(e) => transcripts.extend(batch.into_iter().map(|j| (j, format!("[Error: {e}]")))),
+        let outs = match result {
+            Ok(Ok(outs)) => outs,
+            Ok(Err(e)) => vec![format!("[Error starting {lang}: {e:#}]"); steps.len()],
+            Err(e) => vec![format!("[Error: {e}]"); steps.len()],
+        };
+        for ((j, _), out) in steps.into_iter().zip(outs) {
+            transcripts.entry(j).or_insert_with(Vec::new).push(out);
         }
     }
     transcripts
 }
 
-/// Render a diagram; on a syntax error ask the model to fix it once.
+/// Render an image answer; on failure ask the model to fix it once.
 async fn render_diagram(cfg: &LangConfig, dir: &Path, filename: &str, code: &str) -> Result<Vec<u8>> {
     let path = dir.join(filename);
     std::fs::write(&path, code)?;
@@ -294,14 +461,104 @@ async fn render_diagram(cfg: &LangConfig, dir: &Path, filename: &str, code: &str
         Ok(png) => return Ok(png),
         Err(e) => e,
     };
-    tracing::warn!("[{filename}] diagram failed, asking for a fix: {err:#}");
-    let fixed = strip_fences(&ask_code(&[Part::Text(fix_diagram_prompt(code, &format!("{err:#}")))]).await?).to_string();
+    tracing::warn!("[{filename}] render failed, asking for a fix: {err:#}");
+    let fixed = strip_fences(&ask(Tier::Mid, &[Part::Text(fix_prompt(code, &format!("{err:#}")))], false).await?).to_string();
     std::fs::write(&path, &fixed)?;
     crate::runner::render_image(cfg, &path, dir).await
 }
 
+/// Compile errors and uncaught crashes, as opposed to errors a program prints on purpose.
+fn crashed(out: &str) -> bool {
+    [": error:", "Exception in thread", "Traceback (most recent call last)", "Segmentation fault", "panicked at"].iter().any(|m| out.contains(m))
+        || out.lines().any(|l| l.starts_with("error:"))
+}
+
+/// Models sometimes escape code twice, leaving literal `\n` in a one-line program.
+fn unescape_code(code: &mut String) {
+    if !code.contains('\n') && code.contains("\\n") {
+        *code = code.replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"");
+    }
+}
+
+/// True when every non-empty line of `code` appears in `out`.
+fn shows_code(out: &str, code: &str) -> bool {
+    let mut lines = code.lines().map(str::trim).filter(|l| !l.is_empty()).peekable();
+    lines.peek().is_some() && lines.all(|l| out.contains(l))
+}
+
+/// Session code split at blank lines; each step becomes its own screenshot.
+fn steps_of(code: &str) -> Vec<String> {
+    code.split("\n\n").map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
+}
+
+/// Show the temp work dir as the user's home, like a real terminal would.
+fn tidy_paths(out: &str, dir: &Path) -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "~".into());
+    let mut out = out.to_string();
+    for path in [std::fs::canonicalize(dir).ok(), Some(dir.to_path_buf())].into_iter().flatten() {
+        out = out.replace(&*path.to_string_lossy(), &home);
+    }
+    out
+}
+
 fn question_text(q: &Question) -> String {
     std::iter::once(q.text.as_str()).chain(q.parts.iter().map(String::as_str)).collect::<Vec<_>>().join("\n")
+}
+
+fn is_short_title(title: &str) -> bool {
+    title.strip_prefix('Q').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// A document mixing "Question 2" and "Q3" gets one style: Q2, Q3.
+fn unify_titles(groups: &mut [Group]) {
+    let titles = || groups.iter().flat_map(|g| &g.questions).map(|q| q.title.as_str());
+    if titles().any(is_short_title) && titles().any(|t| t.starts_with("Question ")) {
+        for q in groups.iter_mut().flat_map(|g| &mut g.questions) {
+            if let Some(rest) = q.title.strip_prefix("Question ") { q.title = format!("Q{rest}"); }
+        }
+    }
+}
+
+fn normalized(text: &str) -> String {
+    text.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect()
+}
+
+/// Where a question title first appears in the (normalized) document, so groups keep document order.
+fn title_pos(doc: &str, title: &str) -> Option<usize> {
+    let title = normalized(title);
+    if title.is_empty() { return None }
+    doc.match_indices(&title).map(|(i, _)| i)
+        .find(|&i| !doc[i + title.len()..].starts_with(|c: char| c.is_ascii_digit() && title.ends_with(|t: char| t.is_ascii_digit())))
+}
+
+/// Fallback for unlabelled questions: the furthest point where a slice of the question text appears
+/// exactly once. Furthest, because extracted text may open with shared context (a schema) quoted from earlier.
+fn text_pos(doc: &str, text: &str) -> Option<usize> {
+    let text = normalized(text);
+    let width = text.len().min(40);
+    (0..=text.len().saturating_sub(width)).step_by(10)
+        .map(|i| &text[i..i + width])
+        .filter(|slice| doc.matches(slice).count() == 1)
+        .filter_map(|slice| doc.find(slice)).max()
+}
+
+/// `java File.java` needs the file named after its public class.
+fn java_class(lang: &str, code: &str) -> Option<String> {
+    let rest = code.split("public class ").nth(1).filter(|_| lang == "java")?;
+    let class: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    (!class.is_empty()).then(|| format!("{class}.java"))
+}
+
+/// Consecutive short steps share one screenshot instead of one strip each.
+fn merge_short_steps(steps: Vec<String>) -> Vec<String> {
+    let mut merged: Vec<String> = Vec::new();
+    for step in steps {
+        match merged.last_mut() {
+            Some(last) if last.lines().count() + step.lines().count() <= 20 => { last.push('\n'); last.push_str(&step); }
+            _ => merged.push(step),
+        }
+    }
+    merged
 }
 
 /// `Q3(b)` → `q3b.<ext>`, unique within the group.
@@ -324,7 +581,7 @@ fn describe_langs(configs: &HashMap<String, LangConfig>) -> String {
     format!(
         "- file (saved as <label>.<lang> and run; Java runs as one file with `java file.java`, so declare the class with main first): {}\n\
          - session (typed into an interactive client line by line; state persists across the group): {}\n\
-         - image (rendered to a picture, code not shown): {}",
+         - image (rendered to a picture): {}",
         lang_names(configs, |c| !c.session && !c.image),
         lang_names(configs, |c| c.session),
         lang_names(configs, |c| c.image),
@@ -337,22 +594,61 @@ fn strip_fences(text: &str) -> &str {
     t.strip_suffix("```").unwrap_or(t).trim()
 }
 
-/// Ask for JSON, retrying once when the reply doesn't parse.
-async fn ask_json<T: DeserializeOwned>(parts: &[Part]) -> Result<T> {
-    match parse_json(&ask_code_json(parts).await?) {
-        Ok(value) => Ok(value),
-        Err(e) => {
-            tracing::warn!("bad JSON from model, retrying: {e:#}");
-            parse_json(&ask_code_json(parts).await?)
+/// Ask for JSON, asking again (up to `--retries` times) when the reply doesn't parse.
+async fn ask_json<T: DeserializeOwned>(tier: Tier, parts: &[Part]) -> Result<T> {
+    for attempt in 0.. {
+        let reply = ask(tier, parts, true).await?;
+        tracing::debug!("AI reply: {reply}");
+        match parse_json(&reply) {
+            Err(e) if attempt < crate::ai::max_retries() => tracing::warn!("bad JSON from model, retry {}/{}: {e:#}", attempt + 1, crate::ai::max_retries()),
+            result => return result,
         }
     }
+    unreachable!()
 }
 
 /// Parse the JSON object or array in a model reply, ignoring markdown fences or chatter around it.
 fn parse_json<T: DeserializeOwned>(text: &str) -> Result<T> {
     let start = text.find(['{', '[']).context("no JSON in reply")?;
     let end = text.rfind(['}', ']']).context("no JSON in reply")?;
-    serde_json::from_str(&text[start..=end]).with_context(|| format!("bad JSON: {}", &text[..text.len().min(300)]))
+    let json = &text[start..=end];
+    let first = |json: &str| serde_json::Deserializer::from_str(json).into_iter::<T>().next().context("no JSON in reply")?.map_err(anyhow::Error::from);
+    first(json).or_else(|e| first(&close_brackets(&fix_escapes(json))).map_err(|_| e))
+        .with_context(|| format!("bad JSON: {}", &text[..text.len().min(300)]))
+}
+
+/// Models copy shell escapes into JSON strings (`\$`, `\(`), which JSON rejects; keep the backslash literally.
+fn fix_escapes(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    let mut chars = json.chars();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '\\' {
+            match chars.next() {
+                Some(n @ ('"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u')) => out.push(n),
+                Some(n) => { out.push('\\'); out.push(n) }
+                None => {}
+            }
+        }
+    }
+    out
+}
+
+/// Models sometimes stop before the last closing brackets.
+fn close_brackets(json: &str) -> String {
+    let (mut open, mut in_str, mut escaped) = (Vec::new(), false, false);
+    for c in json.chars() {
+        match (in_str, c) {
+            (true, _) if escaped => escaped = false,
+            (true, '\\') => escaped = true,
+            (true, '"') | (false, '"') => in_str = !in_str,
+            (false, '{') => open.push('}'),
+            (false, '[') => open.push(']'),
+            (false, '}' | ']') => { open.pop(); }
+            _ => {}
+        }
+    }
+    json.chars().chain(open.into_iter().rev()).collect()
 }
 
 fn read_inputs(paths: &[PathBuf], max_pages: usize) -> Result<Inputs> {
@@ -451,11 +747,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ignores_text_after_json() {
+        let v: serde_json::Value = parse_json(r#"[{"a":1}] and then [2]"#).unwrap();
+        assert_eq!(v[0]["a"], 1);
+    }
+
+    #[test]
+    fn closes_unclosed_json() {
+        let v: serde_json::Value = parse_json(r#"[{"title":"Q3","answers":[{"code":"a[0] = '}'"}]"#).unwrap();
+        assert_eq!(v[0]["answers"][0]["code"], "a[0] = '}'");
+    }
+
+    #[test]
     fn parses_fenced_json() {
         let solved: Vec<Solved> = parse_json("Sure!\n```json\n[{\"title\":\"Q1\",\"answers\":[{\"label\":\"Q1\",\"lang\":null}]}]\n```").unwrap();
         assert_eq!(solved[0].answers[0].label, "Q1");
         assert!(solved[0].answers[0].lang.is_none());
         assert_eq!(strip_fences("```dot\ndigraph{}\n```"), "digraph{}");
+    }
+
+    #[test]
+    fn detects_code_shown_in_output() {
+        assert!(shows_code("$ mkdir a\n$ ls\na", "mkdir a\n\nls"));
+        assert!(!shows_code("[Error starting mysql]", "SELECT 1;"));
+        assert!(!shows_code("anything", ""));
+    }
+
+    #[test]
+    fn splits_steps_and_tidies_paths() {
+        assert_eq!(steps_of("mkdir a\nls\n\n\nfind . -name x\n"), ["mkdir a\nls", "find . -name x"]);
+        let dir = std::env::temp_dir().join("savecodex_tidy");
+        std::fs::create_dir_all(&dir).unwrap();
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(tidy_paths(&format!("{}/unix_lab", dir.display()), &dir), format!("{home}/unix_lab"));
+    }
+
+    #[test]
+    fn finds_titles_in_document_order() {
+        let doc = normalized("Q1. a  Q10. b  Q.8 c");
+        assert!(title_pos(&doc, "Q8") > title_pos(&doc, "Q10"));
+        assert_eq!(title_pos(&doc, "Q1"), Some(0));
+        assert_eq!(title_pos(&doc, "Q 9"), None);
+        let doc = normalized("Table STUDENT(roll INT, name TEXT). 1. Create a trigger that rejects bad marks. 8. Create a trigger on BOOKS for prices");
+        assert!(text_pos(&doc, "Using STUDENT(roll INT, name TEXT): Create a trigger that rejects bad marks.") < text_pos(&doc, "Create a trigger on BOOKS for prices"));
+    }
+
+    #[test]
+    fn java_files_take_the_class_name() {
+        assert_eq!(java_class("java", "import x;\npublic class Product {\n}").as_deref(), Some("Product.java"));
+        assert_eq!(java_class("c", "public class Product {}"), None);
+        assert_eq!(merge_short_steps(vec!["$ a".into(), "$ b".into(), "x\n".repeat(30)]).len(), 2);
     }
 
     #[test]
@@ -469,5 +810,29 @@ mod tests {
     #[test]
     fn docx_text_keeps_paragraphs() {
         assert_eq!(docx_text("<w:p><w:t>a &amp; b</w:t></w:p><w:p><w:t>c</w:t><w:tab/><w:t>d</w:t></w:p>"), "a & b\nc\td\n");
+    }
+
+    #[test]
+    fn unescapes_only_one_line_code() {
+        let mut flat = r#"import x;\n\nclass A {\n\tString s = \"hi\";\n}"#.to_string();
+        unescape_code(&mut flat);
+        assert_eq!(flat, "import x;\n\nclass A {\n\tString s = \"hi\";\n}");
+        let mut real = "printf(\"a\\n\");\nreturn 0;".to_string();
+        unescape_code(&mut real);
+        assert_eq!(real, "printf(\"a\\n\");\nreturn 0;");
+    }
+
+    #[test]
+    fn spots_crashes_not_printed_errors() {
+        assert!(crashed("Main.java:1: error: ';' expected"));
+        assert!(crashed("Exception in thread \"main\" java.lang.Unsupported"));
+        assert!(crashed("error: can't find class: Main"));
+        assert!(!crashed("Error: age must be at least 18"));
+    }
+
+    #[test]
+    fn keeps_bad_escapes_literally() {
+        let v: serde_json::Value = parse_json(r#"{"code":"echo \$1 \(x\)\n\"q\""}"#).unwrap();
+        assert_eq!(v["code"], "echo \\$1 \\(x\\)\n\"q\"");
     }
 }

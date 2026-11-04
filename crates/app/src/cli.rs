@@ -7,7 +7,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::server;
 
-/// savecodex — turn assignments into documents.
+/// savecodex — run code and turn it into documents.
 #[derive(Parser)]
 #[command(name = "savecodex", version, about)]
 struct Cli {
@@ -135,6 +135,72 @@ struct DocArgs {
     jobs: usize,
 }
 
+/// Which AI each tier uses. Unset tiers fall back upwards (FAST → MID → SMART); with nothing set,
+/// the first agent CLI found on PATH (claude, codex, gemini, ...) is used, else `GEMINI_API_KEY`.
+/// Providers: gemini, openai, ollama, claude, codex, gemini-cli, cursor, opencode, copilot, qwen, amp, antigravity.
+#[derive(Args)]
+struct AiArgs {
+    /// Provider for SMART: extracting questions in `solve` (once per run).
+    #[arg(long, env = "SMART_PROVIDER")]
+    smart_provider: Option<String>,
+
+    /// Model for SMART (comma-separated Gemini models fall back in order).
+    #[arg(long, env = "SMART_MODEL")]
+    smart_model: Option<String>,
+
+    /// Thinking for SMART: off, low, medium, high, xhigh. Unset keeps the provider's default.
+    #[arg(long, env = "SMART_THINKING")]
+    smart_thinking: Option<String>,
+
+    /// Provider for MID: solving each question group in `solve`.
+    #[arg(long, env = "MID_PROVIDER")]
+    mid_provider: Option<String>,
+
+    /// Model for MID.
+    #[arg(long, env = "MID_MODEL")]
+    mid_model: Option<String>,
+
+    /// Thinking for MID.
+    #[arg(long, env = "MID_THINKING")]
+    mid_thinking: Option<String>,
+
+    /// Provider for FAST: generating stdin for programs.
+    #[arg(long, env = "FAST_PROVIDER")]
+    fast_provider: Option<String>,
+
+    /// Model for FAST.
+    #[arg(long, env = "FAST_MODEL")]
+    fast_model: Option<String>,
+
+    /// Thinking for FAST (agents default to low here).
+    #[arg(long, env = "FAST_THINKING")]
+    fast_thinking: Option<String>,
+
+    /// Retries for a failed AI call: gateway errors, rate limits and replies that don't parse [default: 3].
+    #[arg(long, env = "SAVECODEX_RETRIES")]
+    retries: Option<String>,
+
+    /// Use local Ollama for every tier (first installed model unless *_MODEL is set; OLLAMA_HOST for another host).
+    #[arg(long, env = "SAVECODEX_LOCAL")]
+    local: bool,
+}
+
+impl AiArgs {
+    fn apply(mut self) {
+        if self.local {
+            let ollama = || Some("ollama".to_string());
+            (self.smart_provider, self.mid_provider, self.fast_provider) = (ollama(), ollama(), ollama());
+        }
+        let values = [
+            ("SMART_PROVIDER", self.smart_provider), ("SMART_MODEL", self.smart_model), ("SMART_THINKING", self.smart_thinking),
+            ("MID_PROVIDER", self.mid_provider), ("MID_MODEL", self.mid_model), ("MID_THINKING", self.mid_thinking),
+            ("FAST_PROVIDER", self.fast_provider), ("FAST_MODEL", self.fast_model), ("FAST_THINKING", self.fast_thinking),
+            ("SAVECODEX_RETRIES", self.retries),
+        ];
+        crate::ai::set_overrides(values.into_iter().filter_map(|(k, v)| Some((k.to_string(), v?))).collect());
+    }
+}
+
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Commands {
@@ -155,6 +221,9 @@ enum Commands {
         /// Use the server's env AI config; users need no API key or admin password.
         #[arg(long, env = "SAVECODEX_NO_KEY")]
         no_key: bool,
+
+        #[command(flatten)]
+        ai: AiArgs,
     },
 
     /// Run code files in a folder and package them with their output into a DOCX.
@@ -176,16 +245,21 @@ enum Commands {
 
         #[command(flatten)]
         shot: ShotArgs,
+
+        #[command(flatten)]
+        ai: AiArgs,
     },
 
-    /// Read an assignment (PDF/DOCX/images), solve it with AI, run every answer and write a DOCX.
+    /// Read questions from PDF/DOCX/images, solve them with AI, run every answer and write a DOCX.
     ///
     /// Each question becomes code + terminal screenshot, an ER/UML diagram, or a written answer.
-    /// SQL and shell commands are typed into a real `mysql>` / `$` session. Uses the CODE_* model;
-    /// pick a strong one. Needs poppler (pdftotext, pdftoppm), plus mysql and graphviz (dot) for
-    /// SQL and diagram questions. AI-written code and commands run on this machine.
+    /// SQL and shell commands are typed into a real `mysql>` / `$` session. SMART extracts the
+    /// questions, MID solves them. With several PDF/DOCX inputs each one is solved into its own
+    /// DOCX (other inputs are shared by all; --output needs '{}'). Needs poppler (pdftotext,
+    /// pdftoppm), plus mysql and graphviz (dot) for SQL and diagram questions. AI-written code and
+    /// commands run on this machine.
     Solve {
-        /// Assignment files. PDFs, DOCX and images are read; other files (data like student.txt)
+        /// Input files. PDFs, DOCX and images are read; other files (data like records.txt)
         /// are also copied next to the answers so programs can open them.
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
@@ -203,6 +277,9 @@ enum Commands {
 
         #[command(flatten)]
         shot: ShotArgs,
+
+        #[command(flatten)]
+        ai: AiArgs,
     },
 
     /// Compile and run a source code file using pseudo-terminal.
@@ -250,11 +327,16 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { host, port, debug: _, no_key } => {
+        Commands::Serve { host, port, debug: _, no_key, ai } => {
+            ai.apply();
             server::start(&host, port, no_key).await?;
         }
-        Commands::Pack { folders, recursive, ext, doc, shot } => {
+        Commands::Pack { folders, recursive, ext, doc, shot, ai } => {
+            ai.apply();
             let opts = shot.options();
+            if doc.ai_input != crate::pack::AiInput::Never {
+                println!("🤖 Input AI: {}", crate::ai::describe(crate::ai::Tier::Fast));
+            }
 
             if folders.len() > 1 {
                 if let Some(out) = &doc.output {
@@ -290,21 +372,64 @@ pub async fn run() -> Result<()> {
                 crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), doc.page_break, &opts, None, doc.jobs, recursive, doc.ai_input, !doc.no_trim).await?;
             }
         }
-        Commands::Solve { inputs, questions, max_pages, doc, shot } => {
-            let name = inputs[0].file_stem().and_then(|n| n.to_str()).unwrap_or("solved").to_string();
-            let opts = crate::solve::SolveOptions {
-                term: shot.options(),
-                output: doc.output.map(|o| PathBuf::from(o.to_string_lossy().replace("{}", &name))),
-                doc_title: doc.doc_title.map(|t| t.replace("{}", &name)),
-                doc_text: doc.doc_text.map(|t| t.replace("{}", &name)),
-                page_break: doc.page_break,
-                ai_input: doc.ai_input,
-                trim: !doc.no_trim,
-                jobs: doc.jobs,
-                questions,
-                max_pages,
+        Commands::Solve { inputs, questions, max_pages, doc, shot, ai } => {
+            ai.apply();
+            let custom_cwd = shot.cwd.is_some();
+            let mut term = shot.options();
+            // answers run in their own home dir, so the prompt shows ~ unless --cwd says otherwise
+            if !custom_cwd { term.cwd = "~".into(); }
+
+            let is_doc = |p: &PathBuf| p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["pdf", "docx"].contains(&e.to_lowercase().as_str()));
+            let (docs, shared): (Vec<PathBuf>, Vec<PathBuf>) = inputs.into_iter().partition(is_doc);
+            let runs: Vec<Vec<PathBuf>> = if docs.len() > 1 {
+                docs.into_iter().map(|d| [vec![d], shared.clone()].concat()).collect()
+            } else {
+                vec![docs.into_iter().chain(shared).collect()]
             };
-            crate::solve::run_solve(&inputs, opts).await?;
+            if runs.len() > 1 && doc.output.as_ref().is_some_and(|o| !o.to_string_lossy().contains("{}")) {
+                anyhow::bail!("When solving multiple documents, the --output flag must contain the '{{}}' placeholder to avoid overwriting files.");
+            }
+
+            let multi = runs.len() > 1;
+            let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(doc.jobs.max(1)));
+            let mut set = tokio::task::JoinSet::new();
+            for (i, run) in runs.into_iter().enumerate() {
+                let name = run[0].file_stem().and_then(|n| n.to_str()).unwrap_or("solved").to_string();
+                println!("📚 Solving: {}", run[0].display());
+                let opts = crate::solve::SolveOptions {
+                    term: term.clone(),
+                    output: doc.output.as_ref().map(|o| PathBuf::from(o.to_string_lossy().replace("{}", &name))),
+                    doc_title: doc.doc_title.as_ref().map(|t| t.replace("{}", &name)),
+                    doc_text: doc.doc_text.as_ref().map(|t| t.replace("{}", &name)),
+                    page_break: doc.page_break,
+                    ai_input: doc.ai_input,
+                    trim: !doc.no_trim,
+                    jobs: doc.jobs,
+                    questions,
+                    max_pages,
+                    sem: sem.clone(),
+                    tag: if multi { name.clone() } else { String::new() },
+                };
+                set.spawn(async move { (i, name, crate::solve::run_solve(&run, opts).await) });
+            }
+            let mut results = set.join_all().await;
+            results.sort_by_key(|(i, ..)| *i);
+
+            if !multi {
+                return results.pop().map_or(Ok(()), |(.., r)| r.map(drop));
+            }
+            let width = results.iter().map(|(_, name, _)| name.len()).max().unwrap_or(0);
+            println!("\nSummary:");
+            for (_, name, result) in &results {
+                match result {
+                    Ok(summary) => println!("  {name:width$}  {summary}"),
+                    Err(e) => println!("  {name:width$}  failed: {e:#}"),
+                }
+            }
+            let failed = results.iter().filter(|(.., r)| r.is_err()).count();
+            if failed > 0 {
+                anyhow::bail!("{failed} of {} document(s) failed", results.len());
+            }
         }
         Commands::Run { file, input, output } => {
             let (_cmd_str, out) = crate::runner::run_file(&file, input.as_deref()).await?;

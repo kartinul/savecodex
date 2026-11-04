@@ -50,9 +50,6 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
 
     let mut gemini_api_key = String::new();
     let mut admin_password = String::new();
-    let mut ai_provider = String::new();
-    let mut ai_model = String::new();
-    let mut ai_base_url = String::new();
 
     tracing::debug!("Extracting multipart fields...");
     while let Some(field) = multipart.next_field().await.unwrap_or(None) {
@@ -118,9 +115,6 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
                 }
                 "gemini_api_key" => gemini_api_key = text,
                 "admin_password" => admin_password = text,
-                "ai_provider" => ai_provider = text,
-                "ai_model" => ai_model = text,
-                "ai_base_url" => ai_base_url = text,
                 _ => {}
             }
         }
@@ -128,26 +122,9 @@ async fn pack(State(no_key): State<bool>, mut multipart: Multipart) -> impl Into
 
     tracing::debug!("Finished extracting multipart fields. Files received: {}", got_files);
 
-    let env_admin_pwd = std::env::var("ADMIN_PASSWORD").unwrap_or_default();
-    let mut final_api_key = gemini_api_key.clone();
-
-    if !admin_password.is_empty() && admin_password == env_admin_pwd {
-        final_api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    }
-
-    let provider = match ai_provider.as_str() {
-        "openai_compatible" => crate::ai::Provider::OpenAiCompatible,
-        _ => crate::ai::Provider::Gemini,
-    };
-    let model = if ai_model.is_empty() { "gemini-1.5-pro".to_string() } else { ai_model };
-    let base_url = if ai_base_url.is_empty() { None } else { Some(ai_base_url) };
-
-    let ai_config = (!no_key).then(|| crate::ai::AiConfig {
-        provider,
-        model,
-        base_url,
-        api_key: final_api_key,
-    });
+    // admins and no-key mode use the server's own config; everyone else brings a Gemini key
+    let ai_config = (!no_key && !is_admin(&admin_password))
+        .then(|| crate::ai::AiConfig::gemini(gemini_api_key, crate::ai::Tier::Fast));
 
     if !got_files {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "no files uploaded" }))).into_response();
@@ -246,12 +223,16 @@ pub struct VerifyAdminPayload {
 
 async fn verify_admin(Json(payload): Json<VerifyAdminPayload>) -> impl IntoResponse {
     tracing::debug!("Received /api/verify_admin request");
-    let env_admin_pwd = std::env::var("ADMIN_PASSWORD").unwrap_or_default();
-    let sent_pwd = payload.admin_password.unwrap_or_default();
-
-    if !sent_pwd.is_empty() && sent_pwd == env_admin_pwd {
+    if is_admin(&payload.admin_password.unwrap_or_default()) {
         (StatusCode::OK, Json(json!({ "success": true }))).into_response()
     } else {
         (StatusCode::UNAUTHORIZED, Json(json!({ "success": false, "error": "Invalid admin password" }))).into_response()
     }
+}
+
+fn is_admin(password: &str) -> bool {
+    let expected = std::env::var("ADMIN_PASSWORD").unwrap_or_default();
+    // constant-time so response timing doesn't leak the password
+    !expected.is_empty() && password.len() == expected.len()
+        && password.bytes().zip(expected.bytes()).fold(0, |acc, (a, b)| acc | (a ^ b)) == 0
 }

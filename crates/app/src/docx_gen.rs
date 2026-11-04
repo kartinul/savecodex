@@ -10,10 +10,16 @@ pub struct PackItem {
     pub question: String,
     pub content: String,
     pub answer: String,
+    /// Written after the run (observations), shown below the screenshots.
+    pub answer_after: String,
     /// Empty when there is nothing to show (written-only answers).
-    pub img_bytes: Vec<u8>,
-    pub img_width: u32,
-    pub img_height: u32,
+    pub shots: Vec<Shot>,
+}
+
+pub struct Shot {
+    pub bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
 fn text_para(text: &str) -> Paragraph {
@@ -25,6 +31,11 @@ fn text_para(text: &str) -> Paragraph {
         run = run.add_text(line);
     }
     Paragraph::new().add_run(run)
+}
+
+/// Written answers: blank-line separated plain paragraphs.
+fn answer_paras(text: &str) -> Vec<Paragraph> {
+    text.split("\n\n").map(str::trim).filter(|p| !p.is_empty()).map(text_para).collect()
 }
 
 pub fn generate_docx(
@@ -73,29 +84,36 @@ pub fn generate_docx(
         }
 
         let heading_text = item.heading.clone().unwrap_or_else(|| format!("{}. {}", index + 1, filename_no_ext));
-        docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_text(heading_text).size(36).bold()));
-        for text in [&item.question, &item.content, &item.answer] {
+        if !heading_text.is_empty() {
+            docx = docx.add_paragraph(Paragraph::new().keep_next(true).add_run(Run::new().add_text(heading_text).size(26).bold()));
+        }
+        for text in [&item.question, &item.content] {
             if !text.is_empty() {
                 docx = docx.add_paragraph(text_para(text));
             }
         }
-        if item.img_bytes.is_empty() {
-            continue;
+        for shot in &item.shots {
+            // Scale to fit on a standard page width (approx 600 pixels)
+            // docx-rs 0.4 uses EMUs for image dimensions (1 pixel ≈ 9525 EMUs)
+            let display_w = 600 * 9525;
+            let display_h = if shot.width > 0 {
+                (600.0 * (shot.height as f64 / shot.width as f64) * 9525.0) as u32
+            } else {
+                600 * 9525
+            };
+            let pic = Pic::new(&shot.bytes).size(display_w, display_h);
+            let img_run = Run::new()
+                .add_break(BreakType::TextWrapping) // new line before image
+                .add_image(pic);
+            docx = docx.add_paragraph(Paragraph::new().add_run(img_run));
         }
-
-        // Scale to fit on a standard page width (approx 600 pixels)
-        // docx-rs 0.4 uses EMUs for image dimensions (1 pixel ≈ 9525 EMUs)
-        let display_w = 600 * 9525;
-        let display_h = if item.img_width > 0 {
-            (600.0 * (item.img_height as f64 / item.img_width as f64) * 9525.0) as u32
-        } else {
-            600 * 9525
-        };
-        let pic = Pic::new(&item.img_bytes).size(display_w, display_h);
-        let img_run = Run::new()
-            .add_break(BreakType::TextWrapping) // new line before image
-            .add_image(pic);
-        docx = docx.add_paragraph(Paragraph::new().add_run(img_run));
+        let after: Vec<Paragraph> = answer_paras(&item.answer).into_iter().chain(answer_paras(&item.answer_after)).collect();
+        if !item.shots.is_empty() && !after.is_empty() {
+            docx = docx.add_paragraph(Paragraph::new());
+        }
+        for para in after {
+            docx = docx.add_paragraph(para);
+        }
     }
 
     tracing::debug!("Creating DOCX file at {:?}", output);

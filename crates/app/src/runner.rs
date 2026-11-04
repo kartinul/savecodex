@@ -28,6 +28,9 @@ pub struct LangConfig {
     /// `run` turns `{file}` into `{dir}/{file_stem}.png`.
     #[serde(default)]
     pub image: bool,
+    /// Leave the source out of the document (diagram markup nobody needs to read).
+    #[serde(default)]
+    pub hide_code: bool,
     #[serde(default)]
     windows: Option<OsSpecificConfig>,
     #[serde(default)]
@@ -112,6 +115,18 @@ fn replace_vars(args: &[String], file: &Path, work_dir: &Path) -> Vec<String> {
            .replace("{dir}", &dir_str)
            .replace("{file_stem}", &stem_str)
     }).collect()
+}
+
+impl LangConfig {
+    /// The tool it starts (build step first) exists, so the AI may pick it.
+    pub fn installed(&self) -> bool {
+        let Some(bin) = self.build.as_ref().unwrap_or(&self.run).first() else { return false };
+        if bin.contains('/') || bin.contains('\\') {
+            return Path::new(bin).exists() || bin.starts_with('{');
+        }
+        std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths)
+            .any(|dir| dir.join(bin).is_file() || dir.join(format!("{bin}.exe")).is_file()))
+    }
 }
 
 pub fn load_configurations() -> Result<HashMap<String, LangConfig>> {

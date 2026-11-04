@@ -1,4 +1,5 @@
 .PHONY: dev build serve clean install test
+.DEFAULT_GOAL := build
 
 install:
 	cd frontend && bun install

@@ -166,6 +166,7 @@
       "bash",
       "--norc",
       "--noprofile",
+      "+H",
       "-i"
     ],
     "prompts": [
@@ -182,6 +183,53 @@
       "{file}",
       "-o",
       "{dir}/{file_stem}.png"
+    ],
+    "hide_code": true
+  },
+  "html": {
+    "image": true,
+    "run": [
+      "chromium",
+      "--headless",
+      "--use-mock-keychain",
+      "--disable-gpu",
+      "--hide-scrollbars",
+      "--window-size=1280,800",
+      "--screenshot={dir}/{file_stem}.png",
+      "{file}"
+    ],
+    "macos": {
+      "run": [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "--headless",
+        "--use-mock-keychain",
+        "--disable-gpu",
+        "--hide-scrollbars",
+        "--window-size=1280,800",
+        "--screenshot={dir}/{file_stem}.png",
+        "{file}"
+      ]
+    },
+    "windows": {
+      "run": [
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "--headless",
+        "--use-mock-keychain",
+        "--disable-gpu",
+        "--hide-scrollbars",
+        "--window-size=1280,800",
+        "--screenshot={dir}/{file_stem}.png",
+        "{file}"
+      ]
+    }
+  },
+  "plot": {
+    "image": true,
+    "run": [
+      "env",
+      "MPLBACKEND=Agg",
+      "python3",
+      "{file}"
     ]
   }
 }

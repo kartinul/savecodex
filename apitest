@@ -40,7 +40,7 @@ function test_model() {
             echo -e "❌ Failed (HTTP $status)\n"
         fi
         
-    elif [ "$provider" == "openai_compatible" ]; then
+    elif [ "$provider" == "openai" ]; then
         if [ -z "$key" ] || [ -z "$base" ]; then
             echo -e "❌ Failed: Missing API_KEY or BASE_URL for $type.\n"
             return
@@ -63,22 +63,17 @@ function test_model() {
         fi
         
     else
-        echo -e "⚠️ Unknown provider: $provider\n"
+        echo -e "⚠️ $provider is an agent CLI or unknown; not tested here\n"
     fi
 }
 
-# Test Code Generation Model
-if [ -n "$CODE_PROVIDER" ] && [ -n "$CODE_MODEL" ]; then
-    test_model "Code" "$CODE_PROVIDER" "$CODE_MODEL" "$CODE_API_KEY" "$CODE_BASE_URL"
-else
-    echo -e "⚠️ Code Model settings not found in .env\n"
-fi
-
-# Test Input Generation Model
-if [ -n "$INPUT_PROVIDER" ] && [ -n "$INPUT_MODEL" ]; then
-    test_model "Input" "$INPUT_PROVIDER" "$INPUT_MODEL" "$INPUT_API_KEY" "$INPUT_BASE_URL"
-else
-    echo -e "⚠️ Input Model settings not found in .env\n"
-fi
+for tier in SMART MID FAST; do
+    provider_var="${tier}_PROVIDER" model_var="${tier}_MODEL" key_var="${tier}_API_KEY" base_var="${tier}_BASE_URL"
+    if [ -n "${!provider_var}" ] && [ -n "${!model_var}" ]; then
+        test_model "$tier" "${!provider_var}" "${!model_var%%,*}" "${!key_var}" "${!base_var}"
+    else
+        echo -e "⚠️ $tier provider/model not set in .env (falls back to the tier above, GEMINI_API_KEY or an agent CLI)\n"
+    fi
+done
 
 echo -e "========================================\n"
