@@ -42,6 +42,8 @@ pub async fn run_pack(
 ) -> Result<()> {
     tracing::debug!("run_pack: folder={:?} output={:?} extensions={:?} jobs={} recursive={}", folder, output, extensions, jobs, recursive);
     info!("Starting pack: {}", folder.display());
+    let root = if folder.is_dir() { folder } else { folder.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")) };
+    let _linux = crate::linux::Container::start(root).await?;
 
     let folder_name = folder
         .file_name()

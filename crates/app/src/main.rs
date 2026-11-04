@@ -9,6 +9,7 @@ pub mod ai;
 pub mod prompts;
 pub mod docx_gen;
 pub mod solve;
+pub mod linux;
 
 
 use anyhow::Result;

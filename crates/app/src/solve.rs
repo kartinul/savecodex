@@ -24,7 +24,7 @@ struct Extracted {
 
 #[derive(Deserialize, Serialize)]
 struct Group {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     setup: Option<Setup>,
     questions: Vec<Question>,
 }
@@ -40,6 +40,9 @@ struct Setup {
 #[derive(Deserialize, Serialize)]
 struct Question {
     title: String,
+    /// Set by `assign_labels`, one style for the whole document.
+    #[serde(default)]
+    label: String,
     text: String,
     #[serde(default)]
     parts: Vec<String>,
@@ -92,8 +95,18 @@ pub struct SolveOptions {
 
 const QUESTIONS_PER_CALL: usize = 4;
 
-/// Session databases (`{n}`) must not collide across documents solved at once.
+/// Session namespaces (`{ns}`) must not collide across documents solved at once.
 static NEXT_SESSION_ID: AtomicUsize = AtomicUsize::new(1);
+/// Random per process, so namespaces don't collide with other runs or anything already there.
+static RUN_ID: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    (nanos ^ std::process::id().rotate_left(16)) & 0xffffff
+});
+
+/// An empty or malformed optional field (`"setup": ""`) reads as absent instead of failing the reply.
+fn lenient<'de, D: serde::Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Option<T>, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).ok())
+}
 
 /// Everything read from the input files.
 #[derive(Default)]
@@ -116,6 +129,9 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     let stem = inputs[0].file_stem().and_then(|s| s.to_str()).unwrap_or("solved").to_string();
     let tag = if opts.tag.is_empty() { String::new() } else { format!("[{}] ", opts.tag) };
     let read = read_inputs(inputs, opts.max_pages)?;
+    let work = tempfile::tempdir()?;
+    // declared after `work`, so the container goes before its mounted dir does
+    let _linux = crate::linux::Container::start(work.path()).await?;
     let mut configs = load_configurations()?;
     configs.retain(|_, c| c.installed());
 
@@ -128,16 +144,16 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     for group in &mut extracted.groups {
         group.setup = group.setup.take().filter(|s| !s.code.trim().is_empty());
     }
-    unify_titles(&mut extracted.groups);
+    assign_labels(&mut extracted.groups);
     let doc = normalized(&read.text);
+    // the text first: a bare title ("3") also matches numbered notes and headings before the question
     let question_pos: HashMap<String, usize> = extracted.groups.iter().flat_map(|g| &g.questions)
-        .filter_map(|q| Some((q.title.clone(), title_pos(&doc, &q.title).or_else(|| text_pos(&doc, &q.text))?)))
+        .filter_map(|q| Some((q.title.clone(), text_pos(&doc, &q.text).or_else(|| title_pos(&doc, &q.title))?)))
         .collect();
     let total: usize = extracted.groups.iter().map(|g| g.questions.len()).sum();
     let group_count = extracted.groups.len();
     println!("{tag}📝 {} question(s) in {} group(s), solving with {}", total, group_count, crate::ai::describe(Tier::Mid));
 
-    let work = tempfile::tempdir()?;
     let mut langs = describe_langs(&configs);
     if !extracted.language.trim().is_empty() {
         langs.push_str(&format!("\nThe document's programs are written in {}: use it for every program unless a question names another language.", extracted.language.trim()));
@@ -183,12 +199,6 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
         results.sort_by_key(|(.., title)| question_pos[title]);
     }
 
-    let short = results.iter().any(|(item, ..)| item.heading.as_deref().is_some_and(is_short_title));
-    if short {
-        for (item, ..) in &mut results {
-            if let Some(rest) = item.heading.as_deref().and_then(|h| h.strip_prefix("Question ")) { item.heading = Some(format!("Q{rest}")); }
-        }
-    }
     let mut items = Vec::new();
     let (mut done, mut failed, mut no_shot) = (0, Vec::new(), Vec::new());
     let mut last_label: Option<String> = None;
@@ -242,8 +252,14 @@ async fn solve_group(
         for _ in 0..2 {
             let part = serde_json::to_string_pretty(&serde_json::json!({"setup": group.setup, "questions": todo}))?;
             let earlier = if solved.is_empty() { String::new() } else { serde_json::to_string(&solved)? };
-            let chunk_solved: Vec<Solved> = ask_json(Tier::Mid, &[Part::Text(solve_prompt(&part, &earlier, langs))]).await
+            let mut chunk_solved: Vec<Solved> = ask_json(Tier::Mid, &[Part::Text(solve_prompt(&part, &earlier, langs))]).await
                 .context("solving")?;
+            // models sometimes return the format example or a question nobody asked
+            let asked: HashSet<String> = todo.iter().map(|q| normalized(&q.title)).collect();
+            chunk_solved.retain(|s| asked.contains(&normalized(&s.title)) || {
+                tracing::warn!("[session {n}] dropped an answer to {:?}, which wasn't asked", s.title);
+                false
+            });
             let complete = chunk_solved.len() >= todo.len();
             solved.extend(chunk_solved);
             let answered = answered_titles(&solved);
@@ -252,34 +268,18 @@ async fn solve_group(
             tracing::warn!("[session {n}] no answer for {}, asking again", todo.iter().map(|q| q.title.as_str()).collect::<Vec<_>>().join(", "));
         }
     }
+    for s in &mut solved {
+        let base = group.questions.iter().find(|q| normalized(&q.title) == normalized(&s.title)).map(|q| q.label.clone());
+        for a in s.answers.iter_mut() {
+            if let Some(base) = &base { a.label = heading(base, &a.label) }
+        }
+    }
     for a in solved.iter_mut().flat_map(|q| &mut q.answers) {
         unescape_code(&mut a.code);
         a.files.iter_mut().for_each(|f| unescape_code(&mut f.code));
         if a.lang.as_deref().and_then(|l| configs.get(l)).is_some_and(|c| c.session) {
             // `\G` already ends the statement, so a `;` after it runs an empty one ("No query specified")
             a.code = a.code.replace("\\G;", "\\G");
-        }
-    }
-
-    let session_langs: HashSet<&str> = group.setup.iter().map(|s| s.lang.as_str())
-        .chain(solved.iter().flat_map(|q| q.answers.iter().filter_map(|a| a.lang.as_deref())))
-        .filter(|l| configs.get(*l).is_some_and(|c| c.session))
-        .collect();
-    for lang in &session_langs {
-        if let Some(reset) = &configs[*lang].reset {
-            if let Err(e) = crate::runner::run_piped(&crate::runner::with_group(reset, n), "", dir).await {
-                tracing::warn!("[session {n}] {lang} reset failed: {e:#}");
-            }
-        }
-    }
-
-    let mut items = Vec::new();
-    if let Some(setup) = &group.setup {
-        match configs.get(&setup.lang).filter(|c| c.session) {
-            Some(cfg) => if let Err(e) = crate::runner::run_piped(&crate::runner::with_group(&cfg.run, n), &setup.code, dir).await {
-                tracing::warn!("[session {n}] setup failed: {e:#}");
-            },
-            None => tracing::warn!("[session {n}] setup language {} is not a session language, skipped", setup.lang),
         }
     }
 
@@ -301,7 +301,41 @@ async fn solve_group(
         }
         file_names.push(name);
     }
-    let transcripts = run_sessions(n, &answers, configs, dir).await;
+
+    // nothing between reset and cleanup returns early, so session state never outlives the group
+    let ns = format!("sc{:06x}{n}_", *RUN_ID);
+    let session_langs: HashSet<&str> = group.setup.iter().map(|s| s.lang.as_str())
+        .chain(solved.iter().flat_map(|q| q.answers.iter().filter_map(|a| a.lang.as_deref())))
+        .filter(|l| configs.get(*l).is_some_and(|c| c.session))
+        .collect();
+    for lang in &session_langs {
+        if let Some(reset) = &configs[*lang].reset {
+            if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(reset, &ns), "", dir).await {
+                tracing::warn!("[session {n}] {lang} reset failed: {e:#}");
+            }
+        }
+    }
+    if let Some(setup) = &group.setup {
+        match configs.get(&setup.lang).filter(|c| c.session) {
+            Some(cfg) => {
+                let code = crate::runner::namespaced(&setup.code, &cfg.namespace, &ns);
+                if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(&cfg.run, &ns), &code, dir).await {
+                    tracing::warn!("[session {n}] setup failed: {e:#}");
+                }
+            }
+            None => tracing::warn!("[session {n}] setup language {} is not a session language, skipped", setup.lang),
+        }
+    }
+    let transcripts = run_sessions(&ns, &answers, configs, dir).await;
+    for lang in &session_langs {
+        if let Some(cleanup) = &configs[*lang].cleanup {
+            if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(cleanup, &ns), "", dir).await {
+                tracing::warn!("[session {n}] {lang} cleanup failed: {e:#}");
+            }
+        }
+    }
+
+    let mut items = Vec::new();
     let group_code = answers.iter()
         .flat_map(|(_, _, a)| a.files.iter().map(|f| format!("{}:\n{}", f.name, f.code)).chain(Some(format!("{}:\n{}", a.label, a.code))))
         .collect::<Vec<_>>().join("\n\n");
@@ -407,8 +441,8 @@ async fn solve_group(
     }
     let answered = answered_titles(&solved);
     for q in group.questions.iter().filter(|q| !answered.contains(&normalized(&q.title))) {
-        let item = PackItem { heading: Some(q.title.clone()), answer: "[solve failed: the model gave no answer]".into(), ..Default::default() };
-        items.push((item, Status::Failed, q.title.clone(), q.title.clone()));
+        let item = PackItem { heading: Some(q.label.clone()), answer: "[solve failed: the model gave no answer]".into(), ..Default::default() };
+        items.push((item, Status::Failed, q.label.clone(), q.title.clone()));
     }
     Ok(items)
 }
@@ -426,7 +460,7 @@ fn session_uses(answers: &[(&Solved, usize, &Answer)], configs: &HashMap<String,
 /// Runs each stretch of consecutive answers in the same session language as one session,
 /// so state (tables, variables, cwd) carries over. Blank lines split an answer into steps.
 /// Returns each answer's step transcripts by answer index.
-async fn run_sessions(n: usize, answers: &[(&Solved, usize, &Answer)], configs: &HashMap<String, LangConfig>, dir: &Path) -> HashMap<usize, Vec<String>> {
+async fn run_sessions(ns: &str, answers: &[(&Solved, usize, &Answer)], configs: &HashMap<String, LangConfig>, dir: &Path) -> HashMap<usize, Vec<String>> {
     let session_of = |a: &Answer| a.lang.as_deref().filter(|l| configs.get(*l).is_some_and(|c| c.session)).map(str::to_string);
     let mut transcripts = HashMap::new();
     let mut idx = 0;
@@ -435,11 +469,11 @@ async fn run_sessions(n: usize, answers: &[(&Solved, usize, &Answer)], configs: 
         let batch: Vec<usize> = (idx..answers.len()).take_while(|&j| session_of(answers[j].2).as_deref() == Some(lang.as_str())).collect();
         idx += batch.len();
         let cfg = &configs[&lang];
-        let (argv, prompts, dir) = (crate::runner::with_group(&cfg.run, n), cfg.prompts.clone(), dir.to_path_buf());
+        let (argv, prompts, dir) = (crate::runner::with_ns(&cfg.run, ns), cfg.prompts.clone(), dir.to_path_buf());
         let steps: Vec<(usize, String)> = batch.iter()
             .flat_map(|&j| steps_of(&answers[j].2.code).into_iter().map(move |step| (j, step)))
             .collect();
-        let chunks: Vec<String> = steps.iter().map(|(_, step)| step.clone()).collect();
+        let chunks: Vec<String> = steps.iter().map(|(_, step)| crate::runner::namespaced(step, &cfg.namespace, ns)).collect();
         let result = tokio::task::spawn_blocking(move || crate::runner::run_session(&argv, &prompts, &chunks, &dir)).await;
         let outs = match result {
             Ok(Ok(outs)) => outs,
@@ -447,24 +481,28 @@ async fn run_sessions(n: usize, answers: &[(&Solved, usize, &Answer)], configs: 
             Err(e) => vec![format!("[Error: {e}]"); steps.len()],
         };
         for ((j, _), out) in steps.into_iter().zip(outs) {
-            transcripts.entry(j).or_insert_with(Vec::new).push(out);
+            transcripts.entry(j).or_insert_with(Vec::new).push(crate::runner::unnamespaced(&out, ns));
         }
     }
     transcripts
 }
 
-/// Render an image answer; on failure ask the model to fix it once.
+/// Render an image answer; on failure ask the model to fix it, up to `FIXES` times.
 async fn render_diagram(cfg: &LangConfig, dir: &Path, filename: &str, code: &str) -> Result<Vec<u8>> {
+    const FIXES: usize = 3;
     let path = dir.join(filename);
-    std::fs::write(&path, code)?;
-    let err = match crate::runner::render_image(cfg, &path, dir).await {
-        Ok(png) => return Ok(png),
-        Err(e) => e,
-    };
-    tracing::warn!("[{filename}] render failed, asking for a fix: {err:#}");
-    let fixed = strip_fences(&ask(Tier::Mid, &[Part::Text(fix_prompt(code, &format!("{err:#}")))], false).await?).to_string();
-    std::fs::write(&path, &fixed)?;
-    crate::runner::render_image(cfg, &path, dir).await
+    let mut code = code.to_string();
+    for attempt in 1.. {
+        std::fs::write(&path, &code)?;
+        let err = match crate::runner::render_image(cfg, &path, dir).await {
+            Ok(png) => return Ok(png),
+            Err(e) if attempt > FIXES => return Err(e),
+            Err(e) => e,
+        };
+        tracing::warn!("[{filename}] render failed, asking for a fix ({attempt}/{FIXES}): {err:#}");
+        code = strip_fences(&ask(Tier::Mid, &[Part::Text(fix_prompt(&code, &format!("{err:#}")))], false).await?).to_string();
+    }
+    unreachable!()
 }
 
 /// Compile errors and uncaught crashes, as opposed to errors a program prints on purpose.
@@ -505,18 +543,32 @@ fn question_text(q: &Question) -> String {
     std::iter::once(q.text.as_str()).chain(q.parts.iter().map(String::as_str)).collect::<Vec<_>>().join("\n")
 }
 
-fn is_short_title(title: &str) -> bool {
-    title.strip_prefix('Q').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+/// One label style for the whole document: the title's number ("Problem 2" → 2, "Q1(a)" → 1(a)),
+/// or the whole title when it has none or the number repeats (a bonus section restarting at 1).
+fn assign_labels(groups: &mut [Group]) {
+    let number = |title: &str| {
+        let start = title.find(|c: char| c.is_ascii_digit())?;
+        let rest = &title[start..];
+        let len = rest.find(|c: char| !(c.is_ascii_digit() || c.is_ascii_lowercase() || "().".contains(c))).unwrap_or(rest.len());
+        Some(rest[..len].trim_end_matches('.').to_string())
+    };
+    let numbers: Vec<Option<String>> = groups.iter().flat_map(|g| &g.questions).map(|q| number(&q.title)).collect();
+    for (q, num) in groups.iter_mut().flat_map(|g| &mut g.questions).zip(&numbers) {
+        q.label = match num {
+            Some(num) if numbers.iter().filter(|n| n.as_ref() == Some(num)).count() == 1 => num.clone(),
+            _ => q.title.clone(),
+        };
+    }
 }
 
-/// A document mixing "Question 2" and "Q3" gets one style: Q2, Q3.
-fn unify_titles(groups: &mut [Group]) {
-    let titles = || groups.iter().flat_map(|g| &g.questions).map(|q| q.title.as_str());
-    if titles().any(is_short_title) && titles().any(|t| t.starts_with("Question ")) {
-        for q in groups.iter_mut().flat_map(|g| &mut g.questions) {
-            if let Some(rest) = q.title.strip_prefix("Question ") { q.title = format!("Q{rest}"); }
-        }
-    }
+/// The model's label rebuilt on the question's own (`Q2a`, `2-a` → `2(a)`), keeping a part and a
+/// " (corrected)" suffix, so headings and file names follow one style.
+fn heading(base: &str, label: &str) -> String {
+    let rest = label.find(base).map_or("", |i| &label[i + base.len()..]);
+    if base.ends_with(|c: char| c.is_ascii_digit()) && rest.starts_with(|c: char| c.is_ascii_digit()) { return base.to_string() }
+    let rest = rest.trim_start_matches(['-', '.', '_']);
+    let part = rest.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(rest.len());
+    if part > 0 { format!("{base}({}){}", &rest[..part], &rest[part..]) } else { format!("{base}{rest}") }
 }
 
 fn normalized(text: &str) -> String {
@@ -578,14 +630,23 @@ fn lang_names(configs: &HashMap<String, LangConfig>, pick: impl Fn(&LangConfig) 
 }
 
 fn describe_langs(configs: &HashMap<String, LangConfig>) -> String {
-    format!(
-        "- file (saved as <label>.<lang> and run; Java runs as one file with `java file.java`, so declare the class with main first): {}\n\
+    let mut text = format!(
+        "- file (saved as <label>.<lang> and run): {}\n\
          - session (typed into an interactive client line by line; state persists across the group): {}\n\
          - image (rendered to a picture): {}",
         lang_names(configs, |c| !c.session && !c.image),
         lang_names(configs, |c| c.session),
         lang_names(configs, |c| c.image),
-    )
+    );
+    let mut hints: Vec<(&String, &String)> = configs.iter().filter_map(|(name, c)| Some((name, c.hint.as_ref()?))).collect();
+    hints.sort();
+    for (name, hint) in hints { text.push_str(&format!("\n- {name}: {hint}")) }
+    text.push_str(if crate::linux::enabled() {
+        "\nCode runs as root in a throwaway Linux container: changing the system (crontab, services, packages) is fine."
+    } else {
+        "\nCode runs on the user's own machine: never change the system (no installing crontabs: show the line and run the script once instead; no sudo, services, package installs or deleting anything outside the working directory)."
+    });
+    text
 }
 
 fn strip_fences(text: &str) -> &str {
@@ -609,26 +670,40 @@ async fn ask_json<T: DeserializeOwned>(tier: Tier, parts: &[Part]) -> Result<T> 
 
 /// Parse the JSON object or array in a model reply, ignoring markdown fences or chatter around it.
 fn parse_json<T: DeserializeOwned>(text: &str) -> Result<T> {
-    let start = text.find(['{', '[']).context("no JSON in reply")?;
     let end = text.rfind(['}', ']']).context("no JSON in reply")?;
-    let json = &text[start..=end];
     let first = |json: &str| serde_json::Deserializer::from_str(json).into_iter::<T>().next().context("no JSON in reply")?.map_err(anyhow::Error::from);
-    first(json).or_else(|e| first(&close_brackets(&fix_escapes(json))).map_err(|_| e))
-        .with_context(|| format!("bad JSON: {}", &text[..text.len().min(300)]))
+    let mut first_err = None;
+    // reasoning before the JSON can mention brackets too, so try each opening one
+    for (start, _) in text.match_indices(['{', '[']).take_while(|(i, _)| *i < end).take(30) {
+        let json = &text[start..=end];
+        match first(json).or_else(|e| first(&close_brackets(&fix_escapes(json))).map_err(|_| e)) {
+            Ok(value) => return Ok(value),
+            Err(e) => { first_err.get_or_insert(e); }
+        }
+    }
+    Err(first_err.context("no JSON in reply")?).with_context(|| format!("bad JSON: {}", &text[..text.len().min(300)]))
 }
 
-/// Models copy shell escapes into JSON strings (`\$`, `\(`), which JSON rejects; keep the backslash literally.
+/// Models copy shell escapes into JSON strings (`\$`, `\(`), which JSON rejects, and leave raw
+/// newlines in them: keep such backslashes literally and escape the control characters.
 fn fix_escapes(json: &str) -> String {
-    let mut out = String::with_capacity(json.len());
+    let (mut out, mut in_str) = (String::with_capacity(json.len()), false);
     let mut chars = json.chars();
     while let Some(c) = chars.next() {
-        out.push(c);
-        if c == '\\' {
-            match chars.next() {
-                Some(n @ ('"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u')) => out.push(n),
-                Some(n) => { out.push('\\'); out.push(n) }
-                None => {}
+        match c {
+            '"' => { in_str = !in_str; out.push(c) }
+            '\\' => {
+                out.push(c);
+                match chars.next() {
+                    Some(n @ ('"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u')) => out.push(n),
+                    Some(n) => { out.push('\\'); out.push(n) }
+                    None => {}
+                }
             }
+            '\n' if in_str => out.push_str("\\n"),
+            '\r' if in_str => out.push_str("\\r"),
+            '\t' if in_str => out.push_str("\\t"),
+            _ => out.push(c),
         }
     }
     out
@@ -828,6 +903,35 @@ mod tests {
         assert!(crashed("Exception in thread \"main\" java.lang.Unsupported"));
         assert!(crashed("error: can't find class: Main"));
         assert!(!crashed("Error: age must be at least 18"));
+    }
+
+    #[test]
+    fn parses_after_bracketed_reasoning_and_raw_newlines() {
+        let solved: Vec<Solved> = parse_json("We need [one] entry per question.\n[{\"title\":\"Q1\",\"answers\":[{\"label\":\"1\",\"lang\":\"c\",\"code\":\"int main() {\n}\"}]}]").unwrap();
+        assert_eq!(solved[0].answers[0].code, "int main() {\n}");
+        let g: Group = parse_json(r#"{"setup":"","questions":[]}"#).unwrap();
+        assert!(g.setup.is_none());
+    }
+
+    #[test]
+    fn labels_follow_one_style() {
+        let q = |t: &str| Question { title: t.into(), label: String::new(), text: String::new(), parts: vec![] };
+        let mut groups = vec![Group { setup: None, questions: vec![q("Problem 1"), q("Q2"), q("Q3(a)"), q("Q12. Sort"), q("Student Grouping System"), q("Q1_Trigger"), q("Challenge Q1")] }];
+        assign_labels(&mut groups);
+        let labels: Vec<&str> = groups[0].questions.iter().map(|q| q.label.as_str()).collect();
+        assert_eq!(labels, ["Problem 1", "2", "3(a)", "12", "Student Grouping System", "Q1_Trigger", "Challenge Q1"]);
+        assert_eq!(heading("2", "Q2a"), "2(a)");
+        assert_eq!(heading("2", "2(b)"), "2(b)");
+        assert_eq!(heading("4", "4-1 (corrected)"), "4(1) (corrected)");
+        assert_eq!(heading("1", "Q12"), "1");
+        assert_eq!(heading("Student Grouping System", "1"), "Student Grouping System");
+    }
+
+    #[test]
+    fn orders_by_question_text_before_bare_titles() {
+        let doc = normalized("Assignment Sheet 6. Steps: 3. Making the script executable 4. Running it. Questions: 3. Write a script that accepts a filename. 6. Write a palindrome script.");
+        let pos = |title: &str, text: &str| text_pos(&doc, text).or_else(|| title_pos(&doc, title));
+        assert!(pos("3", "Write a script that accepts a filename.") < pos("6", "Write a palindrome script."));
     }
 
     #[test]

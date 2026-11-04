@@ -163,8 +163,14 @@ fn parse_ansi_line(line: &str, default_fg: Rgb) -> Vec<Run> {
             }
         }
         
+        // other escapes (`ESC ( B` charset switches) draw nothing
+        if chars[i] == '\u{1b}' {
+            i += if matches!(chars.get(i + 1), Some('(' | ')')) { 3 } else { 2 };
+            continue;
+        }
+
         // Skip unprintable control characters (like \r, \x04, etc.) to prevent missing glyph boxes
-        if chars[i].is_control() && chars[i] != '\u{1b}' {
+        if chars[i].is_control() {
             i += 1;
             continue;
         }

@@ -22,9 +22,19 @@ pub struct LangConfig {
     /// Prompt suffixes the session waits for before typing the next line.
     #[serde(default)]
     pub prompts: Vec<String>,
-    /// Command run (no PTY) before a session group starts, e.g. to recreate a scratch database.
+    /// Command run (no PTY) before a session group starts, e.g. to create its scratch database.
     #[serde(default)]
     pub reset: Option<Vec<String>>,
+    /// Command run (no PTY) after a session group ends, e.g. to drop the databases it made.
+    #[serde(default)]
+    pub cleanup: Option<Vec<String>>,
+    /// Keywords whose next identifier gets the session's `{ns}` prefix while typed (stripped again
+    /// from the transcript), so code can only touch what its own session created.
+    #[serde(default)]
+    pub namespace: Vec<String>,
+    /// Advice for the AI on writing answers in this language.
+    #[serde(default)]
+    pub hint: Option<String>,
     /// `run` turns `{file}` into `{dir}/{file_stem}.png`.
     #[serde(default)]
     pub image: bool,
@@ -47,7 +57,9 @@ pub struct OsSpecificConfig {
 
 impl LangConfig {
     fn resolve_os(mut self) -> Self {
-        let os_config = if cfg!(windows) {
+        let os_config = if crate::linux::enabled() {
+            self.linux.take()
+        } else if cfg!(windows) {
             self.windows.take()
         } else if cfg!(target_os = "macos") {
             self.macos.take()
@@ -118,9 +130,17 @@ fn replace_vars(args: &[String], file: &Path, work_dir: &Path) -> Vec<String> {
 }
 
 impl LangConfig {
+    /// The program it starts first (build step, else run), skipping an `env` wrapper.
+    pub fn bin(&self) -> Option<&str> {
+        let argv = self.build.as_ref().unwrap_or(&self.run);
+        let skip = if argv.first().is_some_and(|b| b == "env") { argv.iter().skip(1).position(|a| !a.contains('=')).map_or(argv.len(), |i| i + 1) } else { 0 };
+        argv.get(skip).map(String::as_str)
+    }
+
     /// The tool it starts (build step first) exists, so the AI may pick it.
     pub fn installed(&self) -> bool {
-        let Some(bin) = self.build.as_ref().unwrap_or(&self.run).first() else { return false };
+        let Some(bin) = self.bin() else { return false };
+        if crate::linux::enabled() { return crate::linux::has(bin) }
         if bin.contains('/') || bin.contains('\\') {
             return Path::new(bin).exists() || bin.starts_with('{');
         }
@@ -129,34 +149,25 @@ impl LangConfig {
     }
 }
 
+/// Embedded defaults, then `<config_dir>/savecodex/languages.json`, then `./languages.json`.
+/// An override merges field by field, so it only needs the fields it changes.
 pub fn load_configurations() -> Result<HashMap<String, LangConfig>> {
-    let embedded_str = include_str!("default_languages.json");
-    let mut configs: HashMap<String, LangConfig> = serde_json::from_str(embedded_str)
+    use serde_json::{Map, Value};
+    let mut merged: Map<String, Value> = serde_json::from_str(include_str!("default_languages.json"))
         .context("Failed to parse embedded default_languages.json")?;
-
-    if let Some(proj_dirs) = ProjectDirs::from("", "", "savecodex") {
-        let global_config = proj_dirs.config_dir().join("languages.json");
-        if global_config.exists() {
-            if let Ok(content) = std::fs::read_to_string(&global_config) {
-                if let Ok(global_configs) = serde_json::from_str::<HashMap<String, LangConfig>>(&content) {
-                    configs.extend(global_configs);
-                }
+    let global = ProjectDirs::from("", "", "savecodex").map(|d| d.config_dir().join("languages.json"));
+    for path in global.into_iter().chain([PathBuf::from("languages.json")]) {
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let overrides: Map<String, Value> = serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))?;
+        for (lang, cfg) in overrides {
+            match (merged.get_mut(&lang), cfg) {
+                (Some(Value::Object(base)), Value::Object(fields)) => base.extend(fields),
+                (_, cfg) => { merged.insert(lang, cfg); }
             }
         }
     }
-
-    let local_config = Path::new("languages.json");
-    if local_config.exists() {
-        if let Ok(content) = std::fs::read_to_string(local_config) {
-            if let Ok(local_configs) = serde_json::from_str::<HashMap<String, LangConfig>>(&content) {
-                configs.extend(local_configs);
-            }
-        }
-    }
-
-    let configs = configs.into_iter().map(|(k, v)| (k, v.resolve_os())).collect();
-
-    Ok(configs)
+    let configs: HashMap<String, LangConfig> = serde_json::from_value(Value::Object(merged)).context("Bad language config")?;
+    Ok(configs.into_iter().map(|(k, v)| (k, v.resolve_os())).collect())
 }
 
 /// Unknown languages or configs without `stdin` markers count as needing input.
@@ -259,6 +270,15 @@ fn bwrap_args(work_dir: &Path) -> Vec<String> {
     argv
 }
 
+/// The argv to execute and the env to give it: inside the `--linux` container, or sandboxed on
+/// this machine (`None` env: inherit, since only the container CLI runs here).
+fn prepare(args: &[String], work_dir: &Path, tty: bool) -> (Vec<String>, Option<Vec<(String, String)>>) {
+    match crate::linux::wrap(args, work_dir, tty) {
+        Some(argv) => (argv, None),
+        None => (sandboxed(args, work_dir), Some(sandbox_env(work_dir))),
+    }
+}
+
 /// Allowlisted env for child processes, so server secrets never reach user code.
 fn sandbox_env(work_dir: &Path) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = ["PATH", "LANG", "TERM", "JAVA_HOME", "RUSTUP_HOME", "CARGO_HOME", "HOME"]
@@ -305,13 +325,10 @@ pub async fn run_file_in(
         if args.is_empty() { bail!("Empty build command"); }
         tracing::debug!("Running build command in {:?}: {:?}", work_dir, args);
         
-        let argv = sandboxed(args, &work_dir);
+        let (argv, env) = prepare(args, &work_dir, false);
         let mut build = tokio::process::Command::new(&argv[0]);
-        build.args(&argv[1..])
-            .current_dir(&work_dir)
-            .env_clear()
-            .envs(sandbox_env(&work_dir))
-            .kill_on_drop(true);
+        build.args(&argv[1..]).current_dir(&work_dir).kill_on_drop(true);
+        if let Some(env) = env { build.env_clear().envs(env); }
 
         let output = match timeout(Duration::from_secs(30), build.output()).await {
             Ok(output) => output?,
@@ -350,12 +367,14 @@ pub async fn run_file_in(
     let output = Arc::new(Mutex::new(String::new()));
     let (idle_tx, idle_rx) = mpsc::channel();
     
-    let run_argv = sandboxed(&run_args, &work_dir);
+    let (run_argv, env) = prepare(&run_args, &work_dir, true);
     let mut cmd = CommandBuilder::new(&run_argv[0]);
     cmd.args(&run_argv[1..]);
     cmd.cwd(&work_dir);
-    cmd.env_clear();
-    for (key, val) in sandbox_env(&work_dir) { cmd.env(key, val); }
+    if let Some(env) = env {
+        cmd.env_clear();
+        for (key, val) in env { cmd.env(key, val); }
+    }
     
     let child = Arc::new(Mutex::new(pair.slave.spawn_command(cmd)?));
     let child_clone = Arc::clone(&child);
@@ -475,20 +494,72 @@ fn strip_escapes(line: &str) -> String {
     out
 }
 
-/// Substitute `{n}` (the solve group number) in a session/reset command.
-pub fn with_group(args: &[String], n: usize) -> Vec<String> {
-    args.iter().map(|a| a.replace("{n}", &n.to_string())).collect()
+/// Substitute `{ns}` (the session's namespace prefix) in a session/reset/cleanup command.
+pub fn with_ns(args: &[String], ns: &str) -> Vec<String> {
+    args.iter().map(|a| a.replace("{ns}", ns)).collect()
+}
+
+/// Prefix the name after each of `keywords` with `ns` (`USE shop` → `USE ns_shop`), skipping
+/// `IF [NOT] EXISTS` and anything inside string literals.
+pub fn namespaced(code: &str, keywords: &[String], ns: &str) -> String {
+    let (mut out, mut last, mut armed) = (String::with_capacity(code.len()), 0, None);
+    for (start, end) in words(code) {
+        let word = &code[start..end];
+        out.push_str(&code[last..start]);
+        // only `KEYWORD name` or `KEYWORD `name``: `DATABASE() AS x` names nothing
+        if armed.is_some_and(|e: usize| code[e..start].trim_end_matches('`').trim().is_empty()) {
+            if ["if", "not", "exists"].contains(&word.to_lowercase().as_str()) { armed = Some(end) } else { out.push_str(ns); armed = None }
+        } else {
+            armed = keywords.iter().any(|k| k.eq_ignore_ascii_case(word)).then_some(end);
+        }
+        out.push_str(word);
+        last = end;
+    }
+    out.push_str(&code[last..]);
+    out
+}
+
+/// Undo `namespaced` in a transcript; a table cell gets the removed width back as padding.
+pub fn unnamespaced(text: &str, ns: &str) -> String {
+    let mut parts = text.split(ns);
+    let mut out = parts.next().unwrap_or_default().to_string();
+    for part in parts {
+        let name = part.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).unwrap_or(part.len());
+        out.push_str(&part[..name]);
+        if part[name..].trim_start_matches(' ').starts_with('|') { out.push_str(&" ".repeat(ns.len())) }
+        out.push_str(&part[name..]);
+    }
+    out
+}
+
+/// Byte ranges of the identifiers in `code` outside '...' and "..." literals.
+fn words(code: &str) -> Vec<(usize, usize)> {
+    let (mut words, mut quote, mut escaped, mut start) = (Vec::new(), None, false, None);
+    for (i, c) in code.char_indices().chain([(code.len(), ' ')]) {
+        if let Some(q) = quote {
+            if escaped { escaped = false } else if c == '\\' { escaped = true } else if c == q { quote = None }
+            continue;
+        }
+        let ident = c.is_alphanumeric() || c == '_' || c == '$';
+        match start {
+            None if ident => start = Some(i),
+            Some(s) if !ident => { words.push((s, i)); start = None }
+            _ => {}
+        }
+        if c == '\'' || c == '"' { quote = Some(c) }
+    }
+    words
 }
 
 /// Run `argv` from `work_dir` with `input` on stdin and no PTY; used for resets, setup and diagrams.
 pub async fn run_piped(argv: &[String], input: &str, work_dir: &Path) -> Result<String> {
     use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new(&argv[0])
+    let (argv, env) = prepare(argv, work_dir, false);
+    let mut cmd = tokio::process::Command::new(&argv[0]);
+    if let Some(env) = env { cmd.env_clear().envs(env).env("HOME", work_dir); }
+    let mut child = cmd
         .args(&argv[1..])
         .current_dir(work_dir)
-        .env_clear()
-        .envs(sandbox_env(work_dir))
-        .env("HOME", work_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -515,13 +586,16 @@ pub async fn render_image(config: &LangConfig, file: &Path, work_dir: &Path) -> 
 pub fn run_session(argv: &[String], prompts: &[String], chunks: &[String], work_dir: &Path) -> Result<Vec<String>> {
     let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })?;
     let mut reader = pair.master.try_clone_reader()?;
+    let (argv, env) = prepare(argv, work_dir, true);
     let mut cmd = CommandBuilder::new(&argv[0]);
     cmd.args(&argv[1..]);
     cmd.cwd(work_dir);
-    cmd.env_clear();
-    for (key, val) in sandbox_env(work_dir) { cmd.env(key, val); }
-    // solve sessions run on the host: keep `~/...` inside the job dir
-    cmd.env("HOME", work_dir);
+    if let Some(env) = env {
+        cmd.env_clear();
+        for (key, val) in env { cmd.env(key, val); }
+        // solve sessions run on the host: keep `~/...` inside the job dir
+        cmd.env("HOME", work_dir);
+    }
     let mut child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);
 
@@ -585,7 +659,25 @@ pub fn run_session(argv: &[String], prompts: &[String], chunks: &[String], work_
 
 #[cfg(test)]
 mod tests {
-    use super::{needs_stdin, run_session};
+    use super::{namespaced, needs_stdin, run_session};
+
+    #[test]
+    fn namespaces_only_names_after_keywords() {
+        let kw: Vec<String> = ["DATABASE", "SCHEMA", "USE"].map(String::from).to_vec();
+        assert_eq!(namespaced("CREATE DATABASE IF NOT EXISTS shop;\nuse `shop`;", &kw, "ns_"), "CREATE DATABASE IF NOT EXISTS ns_shop;\nuse `ns_shop`;");
+        assert_eq!(namespaced("DROP DATABASE shop; SELECT DATABASE() AS db;", &kw, "ns_"), "DROP DATABASE ns_shop; SELECT DATABASE() AS db;");
+        assert_eq!(namespaced("INSERT INTO t VALUES ('use me'); SHOW DATABASES;", &kw, "ns_"), "INSERT INTO t VALUES ('use me'); SHOW DATABASES;");
+        assert_eq!(namespaced("USE shop", &[], "ns_"), "USE shop");
+        assert_eq!(super::unnamespaced("| ns_shop |\nUSE ns_shop;", "ns_"), "| shop    |\nUSE shop;");
+    }
+
+    #[test]
+    fn bin_skips_env_wrapper() {
+        let cfgs = super::load_configurations().unwrap();
+        assert_eq!(cfgs["plot"].bin(), Some("python3"));
+        assert_eq!(cfgs["shell"].bin(), Some("bash"));
+        assert_eq!(cfgs["mysql"].bin(), Some("mysql"));
+    }
 
     #[test]
     fn detects_stdin() {

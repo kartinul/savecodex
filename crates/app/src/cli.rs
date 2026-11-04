@@ -133,6 +133,30 @@ struct DocArgs {
     /// Max files (pack) or question groups (solve) to process in parallel.
     #[arg(short, long, default_value_t = 15, env = "SAVECODEX_JOBS")]
     jobs: usize,
+
+    #[command(flatten)]
+    linux: LinuxArgs,
+}
+
+#[derive(Args)]
+struct LinuxArgs {
+    /// Run code in a throwaway Linux container (one per document): Apple container on macOS if
+    /// installed, else Docker. Nothing is installed for you. The image builds on first use;
+    /// screenshots default to --style ubuntu.
+    #[arg(long, env = "SAVECODEX_LINUX")]
+    linux: bool,
+}
+
+impl LinuxArgs {
+    fn apply(&self, shot: &mut crate::term_gen::TermGenOptions) -> Result<()> {
+        if !self.linux { return Ok(()) }
+        crate::linux::enable()?;
+        if !std::env::args().any(|a| a == "--style" || a.starts_with("--style=")) {
+            shot.style = crate::term_gen::WindowStyle::Ubuntu;
+            shot.padding = shot.style.padding();
+        }
+        Ok(())
+    }
 }
 
 /// Which AI each tier uses. Unset tiers fall back upwards (FAST → MID → SMART); with nothing set,
@@ -140,8 +164,7 @@ struct DocArgs {
 /// Providers: gemini, openai, ollama, claude, codex, gemini-cli, cursor, opencode, copilot, qwen, amp, antigravity.
 #[derive(Args)]
 struct AiArgs {
-    /// Provider for SMART: extracting questions in `solve` (once per run).
-    #[arg(long, env = "SMART_PROVIDER")]
+    #[arg(short = 'p', long, visible_alias = "provider", env = "SMART_PROVIDER", help = crate::ai::provider_help())]
     smart_provider: Option<String>,
 
     /// Model for SMART (comma-separated Gemini models fall back in order).
@@ -294,6 +317,9 @@ enum Commands {
         /// Optional output file to write the text transcript to instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        #[command(flatten)]
+        linux: LinuxArgs,
     },
 
     /// Generate a terminal window screenshot (for dev/testing purposes).
@@ -333,7 +359,8 @@ pub async fn run() -> Result<()> {
         }
         Commands::Pack { folders, recursive, ext, doc, shot, ai } => {
             ai.apply();
-            let opts = shot.options();
+            let mut opts = shot.options();
+            doc.linux.apply(&mut opts)?;
             if doc.ai_input != crate::pack::AiInput::Never {
                 println!("🤖 Input AI: {}", crate::ai::describe(crate::ai::Tier::Fast));
             }
@@ -376,6 +403,7 @@ pub async fn run() -> Result<()> {
             ai.apply();
             let custom_cwd = shot.cwd.is_some();
             let mut term = shot.options();
+            doc.linux.apply(&mut term)?;
             // answers run in their own home dir, so the prompt shows ~ unless --cwd says otherwise
             if !custom_cwd { term.cwd = "~".into(); }
 
@@ -431,7 +459,10 @@ pub async fn run() -> Result<()> {
                 anyhow::bail!("{failed} of {} document(s) failed", results.len());
             }
         }
-        Commands::Run { file, input, output } => {
+        Commands::Run { file, input, output, linux } => {
+            if linux.linux { crate::linux::enable()?; }
+            let dir = std::fs::canonicalize(&file)?.parent().map(PathBuf::from).unwrap_or_default();
+            let _linux = crate::linux::Container::start(&dir).await?;
             let (_cmd_str, out) = crate::runner::run_file(&file, input.as_deref()).await?;
             if let Some(path) = output {
                 std::fs::write(&path, out)?;

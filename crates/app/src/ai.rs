@@ -132,6 +132,15 @@ fn find_bin(bin: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// `-p` help: every provider, with the agent CLIs found on this machine first.
+pub fn provider_help() -> String {
+    let (found, missing): (Vec<_>, Vec<_>) = AGENTS.iter().partition(|a| find_bin(a.bin).is_some());
+    let names = |agents: Vec<&Agent>| agents.iter().map(|a| if a.name == a.bin { a.name.to_string() } else { format!("{} ({})", a.name, a.bin) }).collect::<Vec<_>>().join(", ");
+    let found = if found.is_empty() { "none".to_string() } else { names(found) };
+    format!("Provider for SMART: extracting questions in `solve` (once per run). MID and FAST fall back to it, so `-p codex` runs everything on one provider.\n\
+        APIs: gemini, openai, ollama. Agents installed here: {found}. Not installed: {}", names(missing))
+}
+
 impl AiConfig {
     /// A Gemini API config with a user-supplied key (the web UI).
     pub fn gemini(api_key: String, tier: Tier) -> Self {
