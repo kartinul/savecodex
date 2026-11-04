@@ -12,7 +12,7 @@ use crate::ai::{ask, Part, Tier};
 use crate::docx_gen::{PackItem, Shot};
 use crate::pack::AiInput;
 use crate::prompts::{after_run_prompt, extract_prompt, fix_prompt, solve_prompt};
-use crate::runner::{load_configurations, LangConfig};
+use crate::runner::{final_screen, full_screen, load_configurations, LangConfig};
 use crate::term_gen::TermGenOptions;
 
 #[derive(Deserialize)]
@@ -99,6 +99,8 @@ pub struct SolveOptions {
 }
 
 const QUESTIONS_PER_CALL: usize = 4;
+/// Attempts at fixing an answer that crashes, fails or doesn't render.
+const FIXES: usize = 3;
 
 /// Session namespaces (`{ns}`) must not collide across documents solved at once.
 static NEXT_SESSION_ID: AtomicUsize = AtomicUsize::new(1);
@@ -323,19 +325,21 @@ async fn solve_group(
 
     let ns = format!("sc{:06x}{n}_", *RUN_ID);
     let mut transcripts = run_group_sessions(n, &ns, group, &solved, configs, dir).await;
-    // a session error the question isn't about is the model's mistake: fix those answers once and rerun the group
-    let broken: Vec<(usize, usize, String)> = solved.iter().enumerate()
-        .flat_map(|(qi, q)| q.answers.iter().enumerate().map(move |(ai, a)| (qi, ai, a, q)))
-        .enumerate()
-        .filter(|(_, (_, _, a, q))| !a.expects_error && !q.answers.iter().any(|x| x.label.contains("(corrected)")))
-        .filter_map(|(idx, (qi, ai, _, _))| Some((qi, ai, transcripts.get(&idx)?.join("\n"))))
-        .filter(|(_, _, out)| session_failed(out))
-        .collect();
-    if !broken.is_empty() {
+    // a session error the question isn't about is the model's mistake: fix those answers and rerun the group
+    for round in 1..=FIXES {
+        let broken: Vec<(usize, usize, String)> = solved.iter().enumerate()
+            .flat_map(|(qi, q)| q.answers.iter().enumerate().map(move |(ai, a)| (qi, ai, a, q)))
+            .enumerate()
+            .filter(|(_, (_, _, a, q))| !a.expects_error && !q.answers.iter().any(|x| x.label.contains("(corrected)")))
+            .filter_map(|(idx, (qi, ai, _, _))| Some((qi, ai, transcripts.get(&idx)?.join("\n"))))
+            .filter(|(_, _, out)| session_failed(out))
+            .collect();
+        if broken.is_empty() { break }
         for (qi, ai, out) in broken {
+            let q_text = group.questions.iter().find(|x| x.title == solved[qi].title).map(question_text).unwrap_or_default();
             let a = &mut solved[qi].answers[ai];
-            tracing::warn!("[{}] session step failed, asking for a fix", a.label);
-            match ask(Tier::Mid, &[Part::Text(fix_prompt(&a.code, &out))], false).await {
+            tracing::warn!("[{}] session step failed, asking for a fix ({round}/{FIXES})", a.label);
+            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, &a.code, &out))], false).await {
                 Ok(fixed) => {
                     a.code = strip_fences(&fixed).to_string();
                     if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
@@ -362,7 +366,7 @@ async fn solve_group(
             // a corrected answer continues under the heading of the one it corrects
             heading: Some(a.label.replace(" (corrected)", "")),
             content: a.code.clone(),
-            answer: a.answer.clone(),
+            answer: plain_text(&a.answer),
             question: question.filter(|_| opts.questions && *i == 0).map(question_text).unwrap_or_default(),
             ..Default::default()
         };
@@ -391,39 +395,60 @@ async fn solve_group(
                     None
                 }
                 Some(cfg) if cfg.session => {
-                    let steps = merge_short_steps(transcripts.get(&idx).cloned().unwrap_or_default());
-                    for (s, step) in steps.iter().enumerate() {
-                        let mut step_term = term.clone();
-                        step_term.no_title_bar |= s > 0;
-                        item.shots.extend(crate::pack::screenshots(None, &tidy_paths(step, dir), &step_term, opts.trim)?);
+                    let outs = transcripts.get(&idx).cloned().unwrap_or_default();
+                    // keys typed into a full-screen program (vi) can't be shown on a screenshot, so the answer stays text
+                    let typed_into = outs.iter().zip(steps_of(&a.code)).enumerate()
+                        .any(|(k, (out, step))| full_screen(out) && (k + 1 < outs.len() || step.lines().count() > 1));
+                    if typed_into { None } else {
+                        let steps = merge_short_steps(outs.into_iter().map(|o| if full_screen(&o) { final_screen(&o) } else { o }).collect());
+                        for (s, step) in steps.iter().enumerate() {
+                            let mut step_term = term.clone();
+                            step_term.no_title_bar |= s > 0;
+                            item.shots.extend(crate::pack::screenshots(None, &tidy_paths(step, dir), &step_term, opts.trim)?);
+                        }
+                        // typed at the prompt, so already in the screenshot (even when wrapped)
+                        item.content.clear();
+                        Some(tidy_paths(&steps.join("\n"), dir))
                     }
-                    // typed at the prompt, so already in the screenshot (even when wrapped)
-                    item.content.clear();
-                    Some(tidy_paths(&steps.join("\n"), dir))
                 }
                 Some(_) if session_uses(&answers, configs, file_names[idx].as_deref()) => None,
                 Some(_) => {
                     let filename = file_names[idx].clone().context("file answer wasn't written")?;
                     let path = dir.join(&filename);
                     let stdin = Some(&a.stdin).filter(|s| !s.is_empty()).map(String::as_str);
-                    let (mut cmd, mut out) = crate::pack::run_with_input(&path, dir, &filename, &a.code, stdin, &a.args, None, opts.ai_input).await;
+                    let (mut cmd, mut out, mut exit_err) = crate::pack::run_with_input(&path, dir, &filename, &a.code, stdin, &a.args, None, opts.ai_input).await;
                     // a failing given program is followed by its "(corrected)" answer, so only our own crashes are repaired
                     let has_correction = q.answers.iter().any(|x| x.label.contains("(corrected)"));
-                    if crashed(&out) && !has_correction && !a.expects_error {
-                        tracing::warn!("[{}] program crashed, asking for a fix", a.label);
-                        match ask(Tier::Mid, &[Part::Text(fix_prompt(&a.code, &format!("$ {cmd}\n{out}")))], false).await {
-                            Ok(fixed) => {
-                                let fixed = strip_fences(&fixed).to_string();
-                                std::fs::write(&path, &fixed)?;
-                                (cmd, out) = crate::pack::run_with_input(&path, dir, &filename, &fixed, stdin, &a.args, None, opts.ai_input).await;
-                                item.content = fixed;
+                    if !has_correction && !a.expects_error {
+                        let q_text = question.map(question_text).unwrap_or_default();
+                        let (mut code, mut error) = (a.code.clone(), format!("$ {cmd}\n{out}"));
+                        // only a fix that runs cleanly replaces the answer, so a bad fix can't make it worse
+                        for attempt in 1..=FIXES {
+                            if !exit_err && !crashed(&out) { break }
+                            tracing::warn!("[{}] program failed, asking for a fix ({attempt}/{FIXES})", a.label);
+                            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, &code, &error))], false).await {
+                                Ok(fixed) => {
+                                    code = strip_fences(&fixed).to_string();
+                                    std::fs::write(&path, &code)?;
+                                    let run = crate::pack::run_with_input(&path, dir, &filename, &code, stdin, &a.args, None, opts.ai_input).await;
+                                    error = format!("$ {}\n{}", run.0, run.1);
+                                    if !run.2 && !crashed(&run.1) {
+                                        (cmd, out, exit_err) = run;
+                                        item.content = code.clone();
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("[{}] fix failed: {e:#}", a.label);
+                                    break;
+                                }
                             }
-                            Err(e) => tracing::warn!("[{}] fix failed: {e:#}", a.label),
                         }
                     }
-                    let out = tidy_paths(&out, dir);
-                    item.shots = crate::pack::screenshots(Some(&cmd), &out, &term, opts.trim)?;
-                    Some(out)
+                    if full_screen(&out) && stdin.is_some() { None } else {
+                        let out = tidy_paths(&if full_screen(&out) { final_screen(&out) } else { out }, dir);
+                        item.shots = crate::pack::screenshots(Some(&cmd), &out, &term, opts.trim)?;
+                        Some(out)
+                    }
                 }
             },
         };
@@ -443,7 +468,7 @@ async fn solve_group(
             let q_text = question.map(question_text).unwrap_or_default();
             match ask(Tier::Mid, &[Part::Text(after_run_prompt(&q_text, &group_code, out))], false).await {
                 Ok(text) => {
-                    item.answer_after = text.trim().to_string();
+                    item.answer_after = plain_text(&text);
                     // both end up below the screenshot, and the after-run text already answers it
                     item.answer.clear();
                 }
@@ -552,7 +577,6 @@ async fn run_sessions(ns: &str, answers: &[(&Solved, usize, &Answer)], configs: 
 
 /// Render an image answer; on failure ask the model to fix it, up to `FIXES` times.
 async fn render_diagram(cfg: &LangConfig, dir: &Path, filename: &str, code: &str) -> Result<Vec<u8>> {
-    const FIXES: usize = 3;
     let path = dir.join(filename);
     let mut code = code.to_string();
     for attempt in 1.. {
@@ -563,7 +587,7 @@ async fn render_diagram(cfg: &LangConfig, dir: &Path, filename: &str, code: &str
             Err(e) => e,
         };
         tracing::warn!("[{filename}] render failed, asking for a fix ({attempt}/{FIXES}): {err:#}");
-        code = strip_fences(&ask(Tier::Mid, &[Part::Text(fix_prompt(&code, &format!("{err:#}")))], false).await?).to_string();
+        code = strip_fences(&ask(Tier::Mid, &[Part::Text(fix_prompt("", &code, &format!("{err:#}")))], false).await?).to_string();
     }
     unreachable!()
 }
@@ -755,6 +779,13 @@ fn describe_langs(configs: &HashMap<String, LangConfig>) -> String {
         "\nCode runs on the user's own machine: never change the system (no installing crontabs: show the line and run the script once instead; no sudo, services, package installs or deleting anything outside the working directory)."
     });
     text
+}
+
+/// Models put markdown in prose answers even when told not to; the docx shows it raw.
+fn plain_text(text: &str) -> String {
+    text.lines()
+        .map(|l| l.trim_start_matches('#').trim_start().replace("**", "").replace("__", "").replace('`', ""))
+        .collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
 fn strip_fences(text: &str) -> &str {

@@ -73,6 +73,7 @@ pub fn after_run_prompt(question: &str, code: &str, output: &str) -> String {
 }
 
 /// `solve`: fix an answer that failed to render or crashed when run.
-pub fn fix_prompt(code: &str, error: &str) -> String {
-    format!("This code fails:\n{code}\n\nError:\n{error}\n\nReturn ONLY the fixed, complete code, no markdown.")
+pub fn fix_prompt(question: &str, code: &str, error: &str) -> String {
+    let question = if question.is_empty() { String::new() } else { format!("Question:\n{question}\n\n") };
+    format!("{question}This code fails:\n{code}\n\nError:\n{error}\n\nFix the cause of the error so the code still does what it did. Keep every name it uses (files, tables, databases, variables) and invent none. Return ONLY the fixed, complete code, no markdown.")
 }

@@ -179,7 +179,7 @@ async fn process_file(
 
     let content = fs::read_to_string(path).context("Failed to read file")?;
     let t0 = std::time::Instant::now();
-    let (cmd, out) = run_with_input(path, folder, &filename, &content, None, &[], ai_config, ai_input).await;
+    let (cmd, out, _) = run_with_input(path, folder, &filename, &content, None, &[], ai_config, ai_input).await;
     let shot = screenshot(Some(&cmd), &out, opts, trim)?;
     info!("[{}/{}] Done: {} ({:.1}s)", idx + 1, total, filename, t0.elapsed().as_secs_f32());
 
@@ -187,6 +187,7 @@ async fn process_file(
 }
 
 /// Ask the AI for stdin when the code reads input, then run it; failures become the output text.
+/// The flag is set when it exited with an error.
 pub async fn run_with_input(
     path: &Path,
     folder: &Path,
@@ -196,7 +197,7 @@ pub async fn run_with_input(
     args: &[String],
     ai_config: Option<&crate::ai::AiConfig>,
     ai_input: AiInput,
-) -> (String, String) {
+) -> (String, String, bool) {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let wants_ai = match ai_input {
         AiInput::Always => true,
@@ -228,7 +229,7 @@ pub async fn run_with_input(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("[{}] Run failed: {}", filename, e);
-            (filename.to_string(), format!("[Error running file: {}]", e))
+            (filename.to_string(), format!("[Error running file: {}]", e), true)
         }
     }
 }

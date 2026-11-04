@@ -63,3 +63,4 @@ natord = "1.0"
 tempfile = "3"
 base64 = "0.22"
 zip = { version = "8", default-features = false, features = ["deflate"] }
+vt100 = "0.15"

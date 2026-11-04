@@ -299,17 +299,18 @@ fn sandbox_env(work_dir: &Path) -> Vec<(String, String)> {
 
 /// Run a single file. Commands execute from the file's parent directory.
 pub async fn run_file(file: &Path, input_text: Option<&str>) -> Result<(String, String)> {
-    run_file_in(file, input_text, &[], None).await
+    run_file_in(file, input_text, &[], None).await.map(|(cmd, out, _)| (cmd, out))
 }
 
 /// Run a single file, executing all commands from `work_dir` (the packed folder).
 /// Falls back to the file's parent directory when `work_dir` is `None` or unusable.
+/// Returns the command, its output and whether it exited with an error (a timeout isn't one).
 pub async fn run_file_in(
     file: &Path,
     input_text: Option<&str>,
     args: &[String],
     work_dir: Option<&Path>,
-) -> Result<(String, String)> {
+) -> Result<(String, String, bool)> {
     tracing::debug!("run_file_in called for: {:?} (work_dir: {:?})", file, work_dir);
     tracing::trace!("input_text provided: {:?}", input_text);
     
@@ -333,13 +334,13 @@ pub async fn run_file_in(
 
         let output = match timeout(Duration::from_secs(30), build.output()).await {
             Ok(output) => output?,
-            Err(_) => return Ok((args.join(" "), "[Build timeout after 30 seconds]".into())),
+            Err(_) => return Ok((args.join(" "), "[Build timeout after 30 seconds]".into(), true)),
         };
         if !output.status.success() {
             let mut err_out = String::from_utf8_lossy(&output.stdout).to_string();
             err_out.push_str(&String::from_utf8_lossy(&output.stderr));
             let executed_cmd = args.join(" ");
-            return Ok((executed_cmd, err_out));
+            return Ok((executed_cmd, err_out, true));
         }
     }
     
@@ -454,9 +455,10 @@ pub async fn run_file_in(
     
     tracing::debug!("Child process execution finished, wait_res: {:?}", wait_res.is_ok());
 
-    match wait_res {
-        Ok(Ok(Ok(_status))) => {
+    let failed = match wait_res {
+        Ok(Ok(Ok(status))) => {
             drop(pair.master);
+            !status.success()
         },
         Ok(Ok(Err(e))) => {
             drop(pair.master);
@@ -471,16 +473,36 @@ pub async fn run_file_in(
             let _ = child.lock().unwrap().kill();
             drop(pair.master); // Close PTY — signals reader thread to flush and exit
             let partial = collect();
-            return Ok((executed_cmd, format!("{}\n\n[Timeout after 5 seconds]", partial)));
+            return Ok((executed_cmd, format!("{}\n\n[Timeout after 5 seconds]", partial), false));
         }
-    }
+    };
     
     tracing::debug!("Child process exited successfully");
     
     let out = collect();
     let out = out.replace("^D\x08\x08", "").replace("^D", "");
     
-    Ok((executed_cmd, out))
+    Ok((executed_cmd, out, failed))
+}
+
+/// A full-screen program (vi, top, less) redraws in place: it switches to the alternate screen,
+/// sets a scroll region or moves the cursor to a row and column. A plain `clear` (`ESC[H ESC[2J`) doesn't count.
+pub fn full_screen(out: &str) -> bool {
+    out.split("\x1b[").skip(1).any(|seq| {
+        let params: String = seq.chars().take_while(|c| c.is_ascii_digit() || matches!(c, ';' | '?')).collect();
+        match seq[params.len()..].chars().next() {
+            Some('h') => matches!(params.as_str(), "?1049" | "?1047" | "?47"),
+            Some('H' | 'r') => params.contains(';'),
+            _ => false,
+        }
+    })
+}
+
+/// What the terminal shows after `out`, for programs that redraw instead of printing lines.
+pub fn final_screen(out: &str) -> String {
+    let mut term = vt100::Parser::new(24, 80, 0);
+    term.process(out.as_bytes());
+    term.screen().contents()
 }
 
 fn strip_escapes(line: &str) -> String {
