@@ -138,6 +138,17 @@ struct DocArgs {
     linux: LinuxArgs,
 }
 
+/// Ctrl-C or a kill, so a stopped solve can clean up after itself.
+async fn interrupted() {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal handler");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 #[derive(Args)]
 struct LinuxArgs {
     /// Run code in a throwaway Linux container (one per document): Apple container on macOS if
@@ -151,7 +162,8 @@ impl LinuxArgs {
     fn apply(&self, shot: &mut crate::term_gen::TermGenOptions) -> Result<()> {
         if !self.linux { return Ok(()) }
         crate::linux::enable()?;
-        if !std::env::args().any(|a| a == "--style" || a.starts_with("--style=")) {
+        let style_set = std::env::args().any(|a| a == "--style" || a.starts_with("--style=")) || std::env::var_os("SAVECODEX_STYLE").is_some();
+        if !style_set {
             shot.style = crate::term_gen::WindowStyle::Ubuntu;
             shot.padding = shot.style.padding();
         }
@@ -440,7 +452,13 @@ pub async fn run() -> Result<()> {
                 };
                 set.spawn(async move { (i, name, crate::solve::run_solve(&run, opts).await) });
             }
-            let mut results = set.join_all().await;
+            let mut results = tokio::select! {
+                results = set.join_all() => results,
+                _ = interrupted() => {
+                    crate::solve::cleanup_after_interrupt().await;
+                    anyhow::bail!("interrupted");
+                }
+            };
             results.sort_by_key(|(i, ..)| *i);
 
             if !multi {

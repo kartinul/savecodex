@@ -658,42 +658,5 @@ pub fn run_session(argv: &[String], prompts: &[String], chunks: &[String], work_
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{namespaced, needs_stdin, run_session};
-
-    #[test]
-    fn namespaces_only_names_after_keywords() {
-        let kw: Vec<String> = ["DATABASE", "SCHEMA", "USE"].map(String::from).to_vec();
-        assert_eq!(namespaced("CREATE DATABASE IF NOT EXISTS shop;\nuse `shop`;", &kw, "ns_"), "CREATE DATABASE IF NOT EXISTS ns_shop;\nuse `ns_shop`;");
-        assert_eq!(namespaced("DROP DATABASE shop; SELECT DATABASE() AS db;", &kw, "ns_"), "DROP DATABASE ns_shop; SELECT DATABASE() AS db;");
-        assert_eq!(namespaced("INSERT INTO t VALUES ('use me'); SHOW DATABASES;", &kw, "ns_"), "INSERT INTO t VALUES ('use me'); SHOW DATABASES;");
-        assert_eq!(namespaced("USE shop", &[], "ns_"), "USE shop");
-        assert_eq!(super::unnamespaced("| ns_shop |\nUSE ns_shop;", "ns_"), "| shop    |\nUSE shop;");
-    }
-
-    #[test]
-    fn bin_skips_env_wrapper() {
-        let cfgs = super::load_configurations().unwrap();
-        assert_eq!(cfgs["plot"].bin(), Some("python3"));
-        assert_eq!(cfgs["shell"].bin(), Some("bash"));
-        assert_eq!(cfgs["mysql"].bin(), Some("mysql"));
-    }
-
-    #[test]
-    fn detects_stdin() {
-        assert!(needs_stdin("py", "n = int(input())"));
-        assert!(!needs_stdin("py", "print('hi')"));
-        assert!(needs_stdin("zzz", "anything"));
-    }
-
-    #[test]
-    fn session_splits_per_chunk() {
-        let argv: Vec<String> = ["env", "PS1=$ ", "HISTFILE=/dev/null", "BASH_SILENCE_DEPRECATION_WARNING=1", "bash", "--norc", "--noprofile", "-i"]
-            .map(String::from).to_vec();
-        let chunks = ["x=hi\nsleep 0.5; echo $x".to_string(), "echo bye".to_string()];
-        let outs = run_session(&argv, &["$ ".to_string()], &chunks, &std::env::temp_dir()).unwrap();
-        assert_eq!(outs.len(), 2);
-        assert!(outs[0].contains("$ x=hi") && outs[0].trim_end().ends_with("hi"), "{:?}", outs[0]);
-        assert!(outs[1].contains("$ echo bye") && outs[1].trim_end().ends_with("bye"), "{:?}", outs[1]);
-    }
-}
+#[path = "tests/runner.rs"]
+mod tests;

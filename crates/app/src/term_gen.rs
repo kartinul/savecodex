@@ -315,7 +315,8 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
     let style = opts.style;
     let light = opts.theme == "light";
     let banner = if opts.banner && style == WindowStyle::Windows { PS_BANNER } else { "" };
-    let raw = format!("{banner}{}", raw_text.trim_end_matches('\n'));
+    // bash in a container turns bracketed paste on before each prompt, hiding the prompt from the check below
+    let raw = format!("{banner}{}", raw_text.trim_end_matches('\n')).replace("\x1b[?2004h", "").replace("\x1b[?2004l", "");
 
     let (bg, default_fg) = match (style, light) {
         (WindowStyle::Windows, false) => (Rgb(12, 12, 12), Rgb(204, 204, 204)),

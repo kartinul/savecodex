@@ -167,7 +167,7 @@
       "    `> ",
       "   /*> "
     ],
-    "hint": "SQL (MySQL 8; emulate unsupported features such as FULL OUTER JOIN and say so in answer). Each group starts in a fresh empty database: CREATE DATABASE and USE only when the question names a database to create, with that name. Use DELIMITER $$ for procedures and triggers. Show structure with DESC; end SHOW CREATE TABLE with \\G. No transactions or ROLLBACK unless the question asks. Name every constraint a later statement refers to."
+    "hint": "SQL (MySQL 8; emulate unsupported features such as FULL OUTER JOIN and say so in answer). Each group starts in a fresh empty database: CREATE DATABASE and USE only when the question names a database to create, with that name. Use DELIMITER $$ for procedures and triggers, and DROP ... IF EXISTS before creating one. Show structure with DESC; end SHOW CREATE TABLE with \\G. No transactions or ROLLBACK unless the question asks. Name every constraint a later statement refers to."
   },
   "shell": {
     "session": true,

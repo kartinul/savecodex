@@ -110,6 +110,14 @@ impl Drop for Container {
     }
 }
 
+/// Removes every container still running, for an interrupted run whose drops never happen.
+pub fn remove_all() {
+    let Some(rt) = RUNTIME.get() else { return };
+    for (_, id) in MOUNTS.lock().unwrap().drain(..) {
+        let _ = Command::new(rt).args(["rm", "-f", &id]).output();
+    }
+}
+
 /// Whether `bin` exists in the image (true until the first container has been probed).
 pub fn has(bin: &str) -> bool {
     BINS.get().is_none_or(|bins| bins.contains(bin))

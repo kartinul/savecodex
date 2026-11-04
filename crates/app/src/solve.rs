@@ -156,7 +156,7 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
 
     let mut langs = describe_langs(&configs);
     if !extracted.language.trim().is_empty() {
-        langs.push_str(&format!("\nThe document's programs are written in {}: use it for every program unless a question names another language.", extracted.language.trim()));
+        langs.push_str(&format!("\nThe document's programs are written in {}: use it for every program unless a question names another language. Tasks a person does by hand rather than run still get lang null.", extracted.language.trim()));
     }
     let langs = Arc::new(langs);
     let configs = Arc::new(configs);
@@ -227,6 +227,16 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     Ok(summary)
 }
 
+/// An interrupted run never reaches its groups' cleanups or container drops, so undo them here:
+/// every session namespace of this run starts with the same prefix.
+pub async fn cleanup_after_interrupt() {
+    crate::linux::remove_all();
+    let ns = format!("sc{:06x}", *RUN_ID);
+    for cleanup in load_configurations().unwrap_or_default().values().filter_map(|c| c.cleanup.as_ref()) {
+        let _ = crate::runner::run_piped(&crate::runner::with_ns(cleanup, &ns), "", &std::env::temp_dir()).await;
+    }
+}
+
 fn list(labels: &[String]) -> String {
     if labels.is_empty() { String::new() } else { format!(" ({})", labels.join(", ")) }
 }
@@ -255,10 +265,13 @@ async fn solve_group(
             let mut chunk_solved: Vec<Solved> = ask_json(Tier::Mid, &[Part::Text(solve_prompt(&part, &earlier, langs))]).await
                 .context("solving")?;
             // models sometimes return the format example or a question nobody asked
-            let asked: HashSet<String> = todo.iter().map(|q| normalized(&q.title)).collect();
-            chunk_solved.retain(|s| asked.contains(&normalized(&s.title)) || {
-                tracing::warn!("[session {n}] dropped an answer to {:?}, which wasn't asked", s.title);
-                false
+            // models answer to the label they were shown (15) as often as to the title (Practice Q15)
+            chunk_solved.retain_mut(|s| match todo.iter().find(|q| [&q.title, &q.label].iter().any(|t| normalized(t) == normalized(&s.title))) {
+                Some(q) => { s.title = q.title.clone(); true }
+                None => {
+                    tracing::warn!("[session {n}] dropped an answer to {:?}, which wasn't asked", s.title);
+                    false
+                }
             });
             let complete = chunk_solved.len() >= todo.len();
             solved.extend(chunk_solved);
@@ -281,6 +294,7 @@ async fn solve_group(
             // `\G` already ends the statement, so a `;` after it runs an empty one ("No query specified")
             a.code = a.code.replace("\\G;", "\\G");
         }
+        if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
     }
 
     let answers: Vec<(&Solved, usize, &Answer)> = solved.iter()
@@ -318,7 +332,8 @@ async fn solve_group(
     if let Some(setup) = &group.setup {
         match configs.get(&setup.lang).filter(|c| c.session) {
             Some(cfg) => {
-                let code = crate::runner::namespaced(&setup.code, &cfg.namespace, &ns);
+                let code = if setup.lang == "mysql" { with_delimiters(&setup.code) } else { setup.code.clone() };
+                let code = crate::runner::namespaced(&code, &cfg.namespace, &ns);
                 if let Err(e) = crate::runner::run_piped(&crate::runner::with_ns(&cfg.run, &ns), &code, dir).await {
                     tracing::warn!("[session {n}] setup failed: {e:#}");
                 }
@@ -345,7 +360,8 @@ async fn solve_group(
         let mut term = opts.term.clone();
         term.no_title_bar = *i > 0;
         let mut item = PackItem {
-            heading: Some(a.label.clone()),
+            // a corrected answer continues under the heading of the one it corrects
+            heading: Some(a.label.replace(" (corrected)", "")),
             content: a.code.clone(),
             answer: a.answer.clone(),
             question: question.filter(|_| opts.questions && *i == 0).map(question_text).unwrap_or_default(),
@@ -396,7 +412,7 @@ async fn solve_group(
                     let has_correction = q.answers.iter().any(|x| x.label.contains("(corrected)"));
                     if crashed(&out) && !has_correction {
                         tracing::warn!("[{}] program crashed, asking for a fix", a.label);
-                        match ask(Tier::Mid, &[Part::Text(fix_prompt(&a.code, &out))], false).await {
+                        match ask(Tier::Mid, &[Part::Text(fix_prompt(&a.code, &format!("$ {cmd}\n{out}")))], false).await {
                             Ok(fixed) => {
                                 let fixed = strip_fences(&fixed).to_string();
                                 std::fs::write(&path, &fixed)?;
@@ -416,9 +432,11 @@ async fn solve_group(
         if output.as_deref().is_some_and(|out| shows_code(out, &a.code)) {
             item.content.clear();
         }
-        if !a.files.is_empty() {
-            let named = a.files.len() > 1;
-            let files = a.files.iter().map(|f| if named { format!("{}:\n{}", f.name, f.code) } else { f.code.clone() });
+        // models sometimes repeat the answer's own code as a file
+        let files: Vec<&NamedFile> = a.files.iter().filter(|f| f.code.trim() != a.code.trim()).collect();
+        if !files.is_empty() {
+            let named = files.len() > 1;
+            let files = files.iter().map(|f| if named { format!("{}:\n{}", f.name, f.code) } else { f.code.clone() });
             item.content = files.chain(Some(item.content.clone()).filter(|c| !c.is_empty())).collect::<Vec<_>>().join("\n\n");
         }
         if let (true, Some(out)) = (a.answer_after_run, &output) {
@@ -505,10 +523,40 @@ async fn render_diagram(cfg: &LangConfig, dir: &Path, filename: &str, code: &str
     unreachable!()
 }
 
-/// Compile errors and uncaught crashes, as opposed to errors a program prints on purpose.
+/// Compile errors, uncaught crashes, failing commands and bare usage messages, as opposed to
+/// errors a program prints on purpose.
 fn crashed(out: &str) -> bool {
-    [": error:", "Exception in thread", "Traceback (most recent call last)", "Segmentation fault", "panicked at"].iter().any(|m| out.contains(m))
-        || out.lines().any(|l| l.starts_with("error:"))
+    let markers = [": error:", "Exception in thread", "Traceback (most recent call last)", "Segmentation fault", "panicked at",
+        "--help' for more information", ": command not found", ": syntax error"];
+    markers.iter().any(|m| out.contains(m))
+        || out.lines().any(|l| l.starts_with("error:") || l.contains(".sh: line "))
+        || out.trim_start().to_lowercase().starts_with("usage:")
+}
+
+/// MySQL ends a statement at the first `;`, so a trigger, procedure or function body typed without
+/// `DELIMITER` breaks apart. Wraps each such statement, from its `CREATE` to the `END;` closing it.
+fn with_delimiters(code: &str) -> String {
+    if code.to_uppercase().contains("DELIMITER") { return code.to_string() }
+    let lines: Vec<&str> = code.lines().collect();
+    let (mut out, mut in_body) = (Vec::new(), false);
+    for (i, line) in lines.iter().enumerate() {
+        let upper = line.trim().to_uppercase();
+        let routine = upper.starts_with("CREATE ") && ["TRIGGER", "PROCEDURE", "FUNCTION"].iter().any(|k| upper.contains(k));
+        // a body opens with BEGIN before the first `;`; one without (SET NEW.x = 1;) needs no delimiter
+        let header_end = lines[i..].iter().position(|l| l.trim_end().ends_with(';')).map_or(lines.len(), |p| i + p + 1);
+        if !in_body && routine && lines[i..header_end].iter().any(|l| l.to_uppercase().contains("BEGIN")) {
+            out.push("DELIMITER $$".to_string());
+            in_body = true;
+        }
+        if in_body && (upper == "END;" || upper.ends_with(" END;")) {
+            out.push(format!("{}$$", line.trim_end().trim_end_matches(';')));
+            out.push("DELIMITER ;".to_string());
+            in_body = false;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    out.join("\n")
 }
 
 /// Models sometimes escape code twice, leaving literal `\n` in a one-line program.
@@ -544,7 +592,7 @@ fn question_text(q: &Question) -> String {
 }
 
 /// One label style for the whole document: the title's number ("Problem 2" → 2, "Q1(a)" → 1(a)),
-/// or the whole title when it has none or the number repeats (a bonus section restarting at 1).
+/// or every whole title when any number repeats (a bonus section restarting at 1) or one has none.
 fn assign_labels(groups: &mut [Group]) {
     let number = |title: &str| {
         let start = title.find(|c: char| c.is_ascii_digit())?;
@@ -553,11 +601,10 @@ fn assign_labels(groups: &mut [Group]) {
         Some(rest[..len].trim_end_matches('.').to_string())
     };
     let numbers: Vec<Option<String>> = groups.iter().flat_map(|g| &g.questions).map(|q| number(&q.title)).collect();
-    for (q, num) in groups.iter_mut().flat_map(|g| &mut g.questions).zip(&numbers) {
-        q.label = match num {
-            Some(num) if numbers.iter().filter(|n| n.as_ref() == Some(num)).count() == 1 => num.clone(),
-            _ => q.title.clone(),
-        };
+    let unique: HashSet<&Option<String>> = numbers.iter().collect();
+    let bare = unique.len() == numbers.len() && numbers.iter().all(Option::is_some);
+    for (q, num) in groups.iter_mut().flat_map(|g| &mut g.questions).zip(numbers) {
+        q.label = if bare { num.unwrap_or_default() } else { q.title.clone() };
     }
 }
 
@@ -818,125 +865,5 @@ fn docx_text(xml: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ignores_text_after_json() {
-        let v: serde_json::Value = parse_json(r#"[{"a":1}] and then [2]"#).unwrap();
-        assert_eq!(v[0]["a"], 1);
-    }
-
-    #[test]
-    fn closes_unclosed_json() {
-        let v: serde_json::Value = parse_json(r#"[{"title":"Q3","answers":[{"code":"a[0] = '}'"}]"#).unwrap();
-        assert_eq!(v[0]["answers"][0]["code"], "a[0] = '}'");
-    }
-
-    #[test]
-    fn parses_fenced_json() {
-        let solved: Vec<Solved> = parse_json("Sure!\n```json\n[{\"title\":\"Q1\",\"answers\":[{\"label\":\"Q1\",\"lang\":null}]}]\n```").unwrap();
-        assert_eq!(solved[0].answers[0].label, "Q1");
-        assert!(solved[0].answers[0].lang.is_none());
-        assert_eq!(strip_fences("```dot\ndigraph{}\n```"), "digraph{}");
-    }
-
-    #[test]
-    fn detects_code_shown_in_output() {
-        assert!(shows_code("$ mkdir a\n$ ls\na", "mkdir a\n\nls"));
-        assert!(!shows_code("[Error starting mysql]", "SELECT 1;"));
-        assert!(!shows_code("anything", ""));
-    }
-
-    #[test]
-    fn splits_steps_and_tidies_paths() {
-        assert_eq!(steps_of("mkdir a\nls\n\n\nfind . -name x\n"), ["mkdir a\nls", "find . -name x"]);
-        let dir = std::env::temp_dir().join("savecodex_tidy");
-        std::fs::create_dir_all(&dir).unwrap();
-        let home = std::env::var("HOME").unwrap();
-        assert_eq!(tidy_paths(&format!("{}/unix_lab", dir.display()), &dir), format!("{home}/unix_lab"));
-    }
-
-    #[test]
-    fn finds_titles_in_document_order() {
-        let doc = normalized("Q1. a  Q10. b  Q.8 c");
-        assert!(title_pos(&doc, "Q8") > title_pos(&doc, "Q10"));
-        assert_eq!(title_pos(&doc, "Q1"), Some(0));
-        assert_eq!(title_pos(&doc, "Q 9"), None);
-        let doc = normalized("Table STUDENT(roll INT, name TEXT). 1. Create a trigger that rejects bad marks. 8. Create a trigger on BOOKS for prices");
-        assert!(text_pos(&doc, "Using STUDENT(roll INT, name TEXT): Create a trigger that rejects bad marks.") < text_pos(&doc, "Create a trigger on BOOKS for prices"));
-    }
-
-    #[test]
-    fn java_files_take_the_class_name() {
-        assert_eq!(java_class("java", "import x;\npublic class Product {\n}").as_deref(), Some("Product.java"));
-        assert_eq!(java_class("c", "public class Product {}"), None);
-        assert_eq!(merge_short_steps(vec!["$ a".into(), "$ b".into(), "x\n".repeat(30)]).len(), 2);
-    }
-
-    #[test]
-    fn names_are_unique_slugs() {
-        let mut taken = HashSet::new();
-        assert_eq!(unique_name("Q3(b)", "cpp", &mut taken), "q3b.cpp");
-        assert_eq!(unique_name("Q3 (b)", "cpp", &mut taken), "q3b_2.cpp");
-        assert_eq!(unique_name("1.", "sh", &mut taken), "q1.sh");
-    }
-
-    #[test]
-    fn docx_text_keeps_paragraphs() {
-        assert_eq!(docx_text("<w:p><w:t>a &amp; b</w:t></w:p><w:p><w:t>c</w:t><w:tab/><w:t>d</w:t></w:p>"), "a & b\nc\td\n");
-    }
-
-    #[test]
-    fn unescapes_only_one_line_code() {
-        let mut flat = r#"import x;\n\nclass A {\n\tString s = \"hi\";\n}"#.to_string();
-        unescape_code(&mut flat);
-        assert_eq!(flat, "import x;\n\nclass A {\n\tString s = \"hi\";\n}");
-        let mut real = "printf(\"a\\n\");\nreturn 0;".to_string();
-        unescape_code(&mut real);
-        assert_eq!(real, "printf(\"a\\n\");\nreturn 0;");
-    }
-
-    #[test]
-    fn spots_crashes_not_printed_errors() {
-        assert!(crashed("Main.java:1: error: ';' expected"));
-        assert!(crashed("Exception in thread \"main\" java.lang.Unsupported"));
-        assert!(crashed("error: can't find class: Main"));
-        assert!(!crashed("Error: age must be at least 18"));
-    }
-
-    #[test]
-    fn parses_after_bracketed_reasoning_and_raw_newlines() {
-        let solved: Vec<Solved> = parse_json("We need [one] entry per question.\n[{\"title\":\"Q1\",\"answers\":[{\"label\":\"1\",\"lang\":\"c\",\"code\":\"int main() {\n}\"}]}]").unwrap();
-        assert_eq!(solved[0].answers[0].code, "int main() {\n}");
-        let g: Group = parse_json(r#"{"setup":"","questions":[]}"#).unwrap();
-        assert!(g.setup.is_none());
-    }
-
-    #[test]
-    fn labels_follow_one_style() {
-        let q = |t: &str| Question { title: t.into(), label: String::new(), text: String::new(), parts: vec![] };
-        let mut groups = vec![Group { setup: None, questions: vec![q("Problem 1"), q("Q2"), q("Q3(a)"), q("Q12. Sort"), q("Student Grouping System"), q("Q1_Trigger"), q("Challenge Q1")] }];
-        assign_labels(&mut groups);
-        let labels: Vec<&str> = groups[0].questions.iter().map(|q| q.label.as_str()).collect();
-        assert_eq!(labels, ["Problem 1", "2", "3(a)", "12", "Student Grouping System", "Q1_Trigger", "Challenge Q1"]);
-        assert_eq!(heading("2", "Q2a"), "2(a)");
-        assert_eq!(heading("2", "2(b)"), "2(b)");
-        assert_eq!(heading("4", "4-1 (corrected)"), "4(1) (corrected)");
-        assert_eq!(heading("1", "Q12"), "1");
-        assert_eq!(heading("Student Grouping System", "1"), "Student Grouping System");
-    }
-
-    #[test]
-    fn orders_by_question_text_before_bare_titles() {
-        let doc = normalized("Assignment Sheet 6. Steps: 3. Making the script executable 4. Running it. Questions: 3. Write a script that accepts a filename. 6. Write a palindrome script.");
-        let pos = |title: &str, text: &str| text_pos(&doc, text).or_else(|| title_pos(&doc, title));
-        assert!(pos("3", "Write a script that accepts a filename.") < pos("6", "Write a palindrome script."));
-    }
-
-    #[test]
-    fn keeps_bad_escapes_literally() {
-        let v: serde_json::Value = parse_json(r#"{"code":"echo \$1 \(x\)\n\"q\""}"#).unwrap();
-        assert_eq!(v["code"], "echo \\$1 \\(x\\)\n\"q\"");
-    }
-}
+#[path = "tests/solve.rs"]
+mod tests;
