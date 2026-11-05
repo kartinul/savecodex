@@ -251,13 +251,13 @@ impl AiArgs {
             let ollama = || Some("ollama".to_string());
             (self.smart_provider, self.mid_provider, self.fast_provider) = (ollama(), ollama(), ollama());
         }
-        // `-p` on the command line beats MID/FAST providers left in the environment
-        let given = |flags: &[&str]| std::env::args().any(|a| flags.iter().any(|f| a == *f || a.starts_with(&format!("{f}="))));
-        if given(&["--provider", "--smart-provider"]) || std::env::args().any(|a| a.starts_with("-p")) {
-            for (provider, model, tier) in [(&mut self.mid_provider, &mut self.mid_model, "mid"), (&mut self.fast_provider, &mut self.fast_model, "fast")] {
-                if given(&[&format!("--{tier}-provider")]) { continue }
-                *provider = self.smart_provider.clone();
-                if !given(&[&format!("--{tier}-model")]) { *model = Some(String::new()) }
+        // `-p` on the command line sets every tier, over any other provider and env model
+        let given = |flag: &str| std::env::args().any(|a| a == flag || a.starts_with(&format!("{flag}=")));
+        if given("--provider") || given("--smart-provider") || std::env::args().any(|a| a.starts_with("-p")) {
+            let chosen = self.smart_provider.clone();
+            for (provider, model, tier) in [(&mut self.smart_provider, &mut self.smart_model, "smart"), (&mut self.mid_provider, &mut self.mid_model, "mid"), (&mut self.fast_provider, &mut self.fast_model, "fast")] {
+                *provider = chosen.clone();
+                if !given(&format!("--{tier}-model")) { *model = Some(String::new()) }
             }
         }
         let values = [
