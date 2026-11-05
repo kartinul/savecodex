@@ -259,13 +259,35 @@ fn sandboxed(args: &[String], work_dir: &Path) -> Vec<String> {
     argv
 }
 
-/// Read-only system dirs, no home dir, private /tmp and pid namespace.
+/// Fake tools first on the child's PATH, for what can't work sandboxed. A fresh random dir per
+/// server, so a job can't plant its own copy for the next one.
+#[cfg(target_os = "linux")]
+fn shims() -> Option<&'static Path> {
+    use std::os::unix::fs::PermissionsExt;
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = tempfile::Builder::new().prefix("savecodex-shims").tempdir().ok()?.keep();
+        std::fs::write(dir.join("crontab"), include_str!("shims/crontab")).ok()?;
+        std::fs::set_permissions(dir.join("crontab"), std::fs::Permissions::from_mode(0o755)).ok()?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok()?;
+        Some(dir)
+    }).as_deref()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shims() -> Option<&'static Path> { None }
+
+/// Read-only system dirs, no home dir, private /tmp, /var and pid namespace.
 fn bwrap_args(work_dir: &Path) -> Vec<String> {
     let dir = work_dir.to_string_lossy().to_string();
     let mut argv: Vec<String> = [
         "bwrap", "--unshare-all", "--share-net", "--die-with-parent", "--new-session",
-        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/var",
     ].map(String::from).to_vec();
+    if let Some(shims) = shims() {
+        let shims = shims.to_string_lossy().to_string();
+        argv.extend(["--ro-bind".into(), shims.clone(), shims]);
+    }
     for sys_dir in ["/usr", "/bin", "/lib", "/lib64", "/etc", "/run/systemd/resolve"] {
         argv.extend(["--ro-bind-try", sys_dir, sys_dir].map(String::from));
     }
@@ -299,6 +321,9 @@ fn sandbox_env(work_dir: &Path) -> Vec<(String, String)> {
         // shared /tmp as HOME would let one job plant ~/.local python packages for another
         env.retain(|(key, _)| key != "HOME");
         env.push(("HOME".into(), work_dir.to_string_lossy().into()));
+    }
+    if let (Some(shims), Some((_, path))) = (shims(), env.iter_mut().find(|(key, _)| key == "PATH")) {
+        *path = format!("{}:{path}", shims.display());
     }
     env
 }

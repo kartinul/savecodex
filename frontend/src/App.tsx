@@ -30,8 +30,10 @@ const stem = (name: string) => name.replace(/^.*\//, "").replace(/\.[^.]+$/, "")
 const size = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 const SAY: Record<string, string> = { writing: "writing the answer", running: "running it", fixing: "fixing it", ok: "done", failed: "failed" };
 
-function reduce(docs: Doc[], e: JobEvent, mode: Mode): Doc[] {
-  if (e.t === "docs") return e.items.map(d => ({ id: d.id, title: d.title, status: "waiting to start", error: false, tiles: null, since: Date.now() }));
+const isDoc = (path: string) => /\.(pdf|docx)$/i.test(path);
+
+function reduce(docs: Doc[], e: JobEvent, mode: Mode, job: string): Doc[] {
+  if (e.t === "docs") return e.items.map(d => ({ id: d.id, job, title: d.title, status: "waiting to start", error: false, tiles: null, since: Date.now() }));
   return docs.map(d => {
     if (d.id !== e.doc) return d;
     switch (e.t) {
@@ -66,18 +68,18 @@ export default function App() {
   const [custom, setCustom] = useStored<Record<string, DocTheme>>("savecodex.themes", {});
   useEffect(() => { fetchThemes().then(setPresets).catch(() => {}) }, []);
   const [docs, setDocs] = useState<Doc[]>([]);
-  const [job, setJob] = useState("");
   const [toast, setToast] = useState("");
   const [over, setOver] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null), folderInput = useRef<HTMLInputElement>(null);
   const stopFollowing = useRef<() => void>(() => {});
+  const active = useRef(0);
   useEffect(() => {
-    if (!job || phase !== "running") return;
-    const leave = () => clearJob(job);
+    if (phase !== "running") return;
+    const leave = () => stopFollowing.current();
     addEventListener("pagehide", leave);
     return () => removeEventListener("pagehide", leave);
-  }, [job, phase]);
+  }, [phase]);
   const mode = view.mode, files = uploads[mode];
   const set = (patch: Partial<Settings>) => setSettings({ ...settings, ...patch });
   const preview = useDebounced(previewUrl(settings), 200);
@@ -106,31 +108,53 @@ export default function App() {
     return () => removeEventListener("paste", paste);
   });
 
+  /** Follows a job until it finishes; stopping later also drops it on the server. */
+  const follow = (id: string, onEvent: (e: JobEvent) => void) => {
+    active.current++;
+    const unfollow = followJob(id, e => {
+      onEvent(e);
+      if (e.t === "finished" && --active.current === 0) setPhase("done");
+    });
+    const prev = stopFollowing.current;
+    stopFollowing.current = () => { prev(); unfollow(); clearJob(id) };
+  };
+  const unfollowAll = () => { stopFollowing.current(); stopFollowing.current = () => {}; active.current = 0 };
+
   const run = async () => {
-    stopFollowing.current();
-    if (job) clearJob(job);
+    unfollowAll();
     setCfg(false);
     setEditing(false);
     setDocs([]);
     setPhase("running");
     try {
       const id = await startJob(mode, files, settings, theme, apiKey);
-      setJob(id);
-      stopFollowing.current = followJob(id, e => {
-        setDocs(d => reduce(d, e, mode));
-        if (e.t === "finished") setPhase("done");
-      });
+      follow(id, e => setDocs(d => reduce(d, e, mode, id)));
     } catch (err) {
       setPhase("idle");
       setToast(`couldn't start: ${(err as Error).message}`);
     }
   };
-  const stop = () => { stopFollowing.current(); if (job) clearJob(job); setJob(""); setPhase("idle") };
+  const stop = () => { unfollowAll(); setPhase("idle") };
+  /** Solves one document of several again, as its own job, keeping the others. */
+  const redo = async (d: Doc) => {
+    const mine = [files.filter(u => isDoc(u.path))[Number(d.id)], ...files.filter(u => !isDoc(u.path))];
+    const patch = (f: (x: Doc) => Doc) => setDocs(ds => ds.map(x => x.id === d.id ? f(x) : x));
+    patch(x => ({ ...x, status: "waiting to start", error: false, tiles: null, file: undefined, since: Date.now() }));
+    setPhase("running");
+    try {
+      const id = await startJob(mode, mine, settings, theme, apiKey);
+      patch(x => ({ ...x, job: id }));
+      follow(id, e => e.t !== "docs" && patch(x => ({ ...reduce([{ ...x, id: e.doc }], e, mode, id)[0], id: x.id })));
+    } catch (err) {
+      patch(x => ({ ...x, status: `couldn't start: ${(err as Error).message}`, error: true }));
+      if (!active.current) setPhase("done");
+    }
+  };
   const home = () => { setCfg(false); setEditing(false); if (phase === "done") { stop(); setDocs([]) } };
   const clear = () => { stop(); setDocs([]); setUploads({ ...uploads, [mode]: [] }) };
   const download = (list: Doc[]) => list.filter(d => d.file).forEach((d, i) => setTimeout(() => {
     const a = document.createElement("a");
-    a.href = docUrl(job, d.file!.n);
+    a.href = docUrl(d.job, d.file!.n);
     a.download = d.file!.name;
     a.click();
   }, i * 400));
@@ -168,7 +192,7 @@ export default function App() {
         <button className="title brand" onClick={home}>savecodex</button>
         {phase === "idle"
           ? cfg && theme ? <DocPreview mode={mode} s={settings} t={theme} name={name} preview={preview} /> : <Idle mode={mode} preview={preview} />
-          : <Groups docs={docs} job={job} mode={mode} onDownload={d => download([d])} />}
+          : <Groups docs={docs} mode={mode} onDownload={d => download([d])} onRedo={docs.length > 1 ? redo : undefined} />}
       </main>
 
       <aside className="side" aria-label="Panel">

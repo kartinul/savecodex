@@ -1,0 +1,13 @@
+#!/bin/sh
+# the real crontab is setuid + PAM, which can't work sandboxed; this keeps the job's crontab in $HOME
+tab="${HOME:-/tmp}/.crontab"
+none() { echo "no crontab for ${USER:-user}" >&2; exit 1; }
+[ "$1" = -u ] && shift 2
+case "$1" in
+  -l) [ -s "$tab" ] && exec cat "$tab"; none ;;
+  -r) [ -e "$tab" ] || none; rm -f "$tab" ;;
+  -e) "${VISUAL:-${EDITOR:-vi}}" "$tab" ;;
+  - | "") cat > "$tab" ;;
+  -*) echo "usage: crontab [-u user] [file | - | -l | -r | -e]" >&2; exit 1 ;;
+  *) cp "$1" "$tab" ;;
+esac

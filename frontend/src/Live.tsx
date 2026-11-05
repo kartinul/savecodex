@@ -3,7 +3,7 @@ import { partLabel, shotUrl, type DocTheme, type Look, type Mode, type Settings,
 import { Ticker, type Step } from "./Ticker";
 
 export type Tile = { id: string; title: string; state: State; note: string; code: string; written: boolean; output: string; shots: number[]; since: number };
-export type Doc = { id: string; title: string; status: string; error: boolean; tiles: Tile[] | null; since: number; file?: { n: number; name: string } };
+export type Doc = { id: string; job: string; title: string; status: string; error: boolean; tiles: Tile[] | null; since: number; file?: { n: number; name: string } };
 
 const LABEL: Record<State, string> = { waiting: "waiting", writing: "writing", running: "running", fixing: "fixing", ok: "done", failed: "failed" };
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -86,9 +86,10 @@ function TileView({ tile, n, job, mode, onOpen }: { tile: Tile; n: number; job: 
 
 const Ghost = ({ since }: { since: number }) => <div className="tile ghost"><div className="tile-title">finding the tasks</div><div className="tile-body"><Ticker step="reading" since={since} /></div><div className="tile-note" /></div>;
 
-export function Groups({ docs, job, mode, onDownload }: { docs: Doc[]; job: string; mode: Mode; onDownload: (d: Doc) => void }) {
+export function Groups({ docs, mode, onDownload, onRedo }: { docs: Doc[]; mode: Mode; onDownload: (d: Doc) => void; onRedo?: (d: Doc) => void }) {
   const [open, setOpen] = useState<{ doc: string; id: string } | null>(null);
-  const shown = open && docs.find(d => d.id === open.doc)?.tiles?.find(t => t.id === open.id);
+  const openDoc = open && docs.find(d => d.id === open.doc);
+  const shown = open && openDoc?.tiles?.find(t => t.id === open.id);
   useEffect(() => {
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(null);
     addEventListener("keydown", esc);
@@ -104,9 +105,10 @@ export function Groups({ docs, job, mode, onDownload }: { docs: Doc[]; job: stri
               <div className="grp-name"><h2 className="title">{d.title}</h2><span className={`status${d.error ? " err" : ""}`}>{d.status}</span></div>
               {d.tiles && <span className="count">{done} of {d.tiles.length} done</span>}
               {d.file && <button className="link" onClick={() => onDownload(d)}>download</button>}
+              {onRedo && (d.file || d.error) && <button className="link" title="solve this one again" aria-label={`Solve ${d.title} again`} onClick={() => onRedo(d)}>↻</button>}
             </header>
             <div className="tiles">
-              {d.tiles ? d.tiles.map((t, i) => <TileView key={t.id} tile={t} n={i + 1} job={job} mode={mode} onOpen={() => setOpen({ doc: d.id, id: t.id })} />) : !d.error && <Ghost since={d.since} />}
+              {d.tiles ? d.tiles.map((t, i) => <TileView key={t.id} tile={t} n={i + 1} job={d.job} mode={mode} onOpen={() => setOpen({ doc: d.id, id: t.id })} />) : !d.error && <Ghost since={d.since} />}
             </div>
           </section>
         );
@@ -115,11 +117,11 @@ export function Groups({ docs, job, mode, onDownload }: { docs: Doc[]; job: stri
         <div className="modal" onClick={e => e.target === e.currentTarget && setOpen(null)}>
           <div className="modal-card" role="dialog" aria-modal="true">
             <button className="btn small close" onClick={() => setOpen(null)}>close</button>
-            <h2 className="title">{mode === "pack" ? shown.title : `q${(docs.find(d => d.id === open!.doc)?.tiles?.indexOf(shown) ?? 0) + 1}`}</h2>
+            <h2 className="title">{mode === "pack" ? shown.title : `q${(openDoc?.tiles?.indexOf(shown) ?? 0) + 1}`}</h2>
             {mode === "solve" && <p>{shown.title}</p>}
             {shown.note && <p className="muted">{shown.note}</p>}
             {shown.code && <><h3>{shown.written ? "answer" : "code"}</h3>{shown.written ? <p>{shown.code}</p> : <pre>{shown.code}</pre>}</>}
-            {shown.shots.length > 0 && <><h3>output</h3>{shown.shots.map(n => <img key={n} className="shot" src={shotUrl(job, n)} alt="Terminal screenshot" />)}</>}
+            {shown.shots.length > 0 && <><h3>output</h3>{shown.shots.map(n => <img key={n} className="shot" src={shotUrl(openDoc!.job, n)} alt="Terminal screenshot" />)}</>}
             {!shown.shots.length && shown.output && <><h3>output</h3><pre>{shown.output}</pre></>}
           </div>
         </div>
