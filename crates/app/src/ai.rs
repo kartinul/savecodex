@@ -111,6 +111,8 @@ pub struct AiConfig {
 
 static OVERRIDES: OnceLock<HashMap<String, String>> = OnceLock::new();
 static DEAD_AGENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+/// How often each model actually answered, since a routing gateway (`auto`) picks one per request.
+static ANSWERED_BY: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
 static AGENT_SLOTS: OnceLock<Vec<Arc<Semaphore>>> = OnceLock::new();
 static LAST_AGENT_START: OnceLock<tokio::sync::Mutex<Instant>> = OnceLock::new();
 
@@ -401,9 +403,23 @@ async fn openai(config: &AiConfig, parts: &[Part]) -> Result<String> {
     }
 
     let res: Value = resp.json().await?;
+    let model = res["model"].as_str().unwrap_or(&config.model).to_string();
+    let mut answered = ANSWERED_BY.lock().unwrap();
+    match answered.iter_mut().find(|(m, _)| *m == model) {
+        Some((_, n)) => *n += 1,
+        None => answered.push((model, 1)),
+    }
+    drop(answered);
     res["choices"][0]["message"]["content"].as_str()
         .map(str::to_string)
         .context("Failed to extract text from OpenAI compatible response")
+}
+
+/// The models that answered openai requests, most used first.
+pub fn answered_by() -> Vec<(String, usize)> {
+    let mut answered = ANSWERED_BY.lock().unwrap().clone();
+    answered.sort_by(|a, b| b.1.cmp(&a.1));
+    answered
 }
 
 /// Gateways in front of free models time out or fail over now and then, so 5xx and 429 are retried

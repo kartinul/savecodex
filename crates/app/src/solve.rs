@@ -11,7 +11,7 @@ use tokio::task::JoinSet;
 use crate::ai::{ask, Part, Tier};
 use crate::docx_gen::{PackItem, Shot};
 use crate::pack::AiInput;
-use crate::prompts::{after_run_prompt, extract_prompt, fix_prompt, solve_prompt};
+use crate::prompts::{after_run_prompt, check_prompt, extract_prompt, fix_prompt, review_prompt, solve_prompt};
 use crate::runner::{final_screen, full_screen, load_configurations, LangConfig};
 use crate::term_gen::TermGenOptions;
 
@@ -29,7 +29,7 @@ struct Group {
     questions: Vec<Question>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Setup {
     #[serde(default)]
     lang: String,
@@ -48,13 +48,13 @@ struct Question {
     parts: Vec<String>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Solved {
     title: String,
     answers: Vec<Answer>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Answer {
     label: String,
     lang: Option<String>,
@@ -73,9 +73,15 @@ struct Answer {
     /// The error is what the question wants shown, so it isn't sent back for a fix.
     #[serde(default)]
     expects_error: bool,
+    /// Shown above the answer, set by `prepare`.
+    #[serde(skip)]
+    heading: String,
+    /// The heading with every part kept, which names the answer's file.
+    #[serde(skip)]
+    slug: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct NamedFile {
     name: String,
     code: String,
@@ -87,11 +93,12 @@ pub struct SolveOptions {
     pub doc_title: Option<String>,
     pub doc_text: Option<String>,
     pub page_break: bool,
-    pub ai_input: AiInput,
     pub trim: bool,
     pub jobs: usize,
     pub questions: bool,
     pub max_pages: usize,
+    /// `--check`: the confidence a SMART "bad" grade needs to redo an answer; None skips grading.
+    pub check: Option<f32>,
     /// Shared by every document solved at once, so `jobs` caps them together.
     pub sem: Arc<Semaphore>,
     /// Prefix for progress lines when several documents run at once.
@@ -101,6 +108,50 @@ pub struct SolveOptions {
 const QUESTIONS_PER_CALL: usize = 4;
 /// Attempts at fixing an answer that crashes, fails or doesn't render.
 const FIXES: usize = 3;
+
+/// How much help the models needed across the whole run, and what `--check` found.
+struct Stats {
+    answers: AtomicUsize,
+    bad_json: AtomicUsize,
+    asked_again: AtomicUsize,
+    fixes: AtomicUsize,
+    redone: AtomicUsize,
+    good: AtomicUsize,
+    bad: AtomicUsize,
+}
+
+static STATS: Stats = Stats {
+    answers: AtomicUsize::new(0),
+    bad_json: AtomicUsize::new(0),
+    asked_again: AtomicUsize::new(0),
+    fixes: AtomicUsize::new(0),
+    redone: AtomicUsize::new(0),
+    good: AtomicUsize::new(0),
+    bad: AtomicUsize::new(0),
+};
+
+fn count(stat: &AtomicUsize, n: usize) {
+    stat.fetch_add(n, Ordering::Relaxed);
+}
+
+/// Prints what `--check` found and warns when the models needed a lot of help.
+pub fn print_stats() {
+    let get = |stat: &AtomicUsize| stat.load(Ordering::Relaxed);
+    let s = &STATS;
+    let (answers, bad_json, asked_again, fixes, redone) = (get(&s.answers), get(&s.bad_json), get(&s.asked_again), get(&s.fixes), get(&s.redone));
+    let answered = crate::ai::answered_by();
+    if !answered.is_empty() {
+        println!("🤖 answered by: {}", answered.iter().map(|(m, n)| format!("{m} ×{n}")).collect::<Vec<_>>().join(", "));
+    }
+    if get(&s.good) + get(&s.bad) > 0 {
+        println!("🔎 check: {} good, {} bad, {redone} question(s) redone", get(&s.good), get(&s.bad));
+    }
+    // shortcut: help on over a quarter of the answers counts as weak; tune if it warns on good models
+    if (bad_json + asked_again + fixes + redone) * 4 > answers.max(1) {
+        println!("⚠️  {} looks weak here: {bad_json} bad JSON replies, {asked_again} re-asks, {fixes} fixes and {redone} redos over {answers} answers. A stronger SMART/MID model would do better.",
+            crate::ai::describe(Tier::Mid));
+    }
+}
 
 /// Session namespaces (`{ns}`) must not collide across documents solved at once.
 static NEXT_SESSION_ID: AtomicUsize = AtomicUsize::new(1);
@@ -143,13 +194,16 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     configs.retain(|_, c| c.installed());
 
     println!("{tag}🔍 Extracting questions with {} ({} image(s))…", crate::ai::describe(Tier::Smart), read.images.len() / 2);
-    let mut parts = vec![Part::Text(extract_prompt(&read.text, &lang_names(&configs, |c| c.session)))];
+    let mut parts = vec![Part::Text(extract_prompt(&read.text, &lang_names(&configs, |c| !c.image), &lang_names(&configs, |c| c.session)))];
     parts.extend(read.images);
     let permit = opts.sem.acquire().await.expect("semaphore closed");
     let mut extracted: Extracted = ask_json(Tier::Smart, &parts).await.context("extracting questions")?;
     drop(permit);
+    // a document's setup also holds for later groups that bring none of their own
+    let mut last_setup: Option<Setup> = None;
     for group in &mut extracted.groups {
-        group.setup = group.setup.take().filter(|s| !s.code.trim().is_empty());
+        group.setup = group.setup.take().filter(|s| !s.code.trim().is_empty()).or_else(|| last_setup.clone());
+        last_setup = group.setup.clone();
     }
     assign_labels(&mut extracted.groups);
     let doc = normalized(&read.text);
@@ -165,6 +219,7 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     if !extracted.language.trim().is_empty() {
         langs.push_str(&format!("\nThe document's programs are written in {}: use it for every program unless a question names another language. Tasks a person does by hand rather than run still get lang null.", extracted.language.trim()));
     }
+    let doc_lang = Some(extracted.language.trim().to_lowercase()).filter(|l| configs.get(l).is_some_and(|c| !c.session && !c.image));
     let langs = Arc::new(langs);
     let configs = Arc::new(configs);
     let data_files = Arc::new(read.data_files);
@@ -172,7 +227,7 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     let mut set = JoinSet::new();
     for (n, group) in extracted.groups.into_iter().enumerate() {
         let dir = work.path().join(format!("g{}", n + 1));
-        let (configs, langs, data_files, opts, tag) = (configs.clone(), langs.clone(), data_files.clone(), opts.clone(), tag.clone());
+        let (configs, langs, doc_lang, data_files, opts, tag) = (configs.clone(), langs.clone(), doc_lang.clone(), data_files.clone(), opts.clone(), tag.clone());
         set.spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(n as u64)).await;
             let _permit = opts.sem.acquire().await.expect("semaphore closed");
@@ -181,7 +236,7 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
             tracing::info!("{progress} Solving: {titles}");
             let started = std::time::Instant::now();
             let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
-            let result = solve_group(session_id, &group, &dir, &configs, &langs, &data_files, &opts).await;
+            let result = solve_group(session_id, &group, &dir, &configs, &langs, doc_lang.as_deref(), &data_files, &opts).await;
             let secs = started.elapsed().as_secs_f32();
             match &result {
                 Ok(items) => {
@@ -248,12 +303,14 @@ fn list(labels: &[String]) -> String {
     if labels.is_empty() { String::new() } else { format!(" ({})", labels.join(", ")) }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn solve_group(
     n: usize,
     group: &Group,
     dir: &Path,
     configs: &HashMap<String, LangConfig>,
     langs: &str,
+    doc_lang: Option<&str>,
     data_files: &[PathBuf],
     opts: &SolveOptions,
 ) -> Result<Vec<(PackItem, Status, String, String)>> {
@@ -261,145 +318,82 @@ async fn solve_group(
     for file in data_files {
         std::fs::copy(file, dir.join(file.file_name().context("bad data file name")?))?;
     }
-    // big groups in one call outlast gateway timeouts, so they are solved a few questions at a time
-    let mut solved: Vec<Solved> = Vec::new();
-    for chunk in group.questions.chunks(QUESTIONS_PER_CALL) {
-        let mut todo: Vec<&Question> = chunk.iter().collect();
-        // models sometimes answer only some of the questions; ask once more for the rest
-        for _ in 0..2 {
-            let part = serde_json::to_string_pretty(&serde_json::json!({"setup": group.setup, "questions": todo}))?;
-            let earlier = if solved.is_empty() { String::new() } else { serde_json::to_string(&solved)? };
-            let mut chunk_solved: Vec<Solved> = ask_json(Tier::Mid, &[Part::Text(solve_prompt(&part, &earlier, langs))]).await
-                .context("solving")?;
-            // models sometimes return the format example or a question nobody asked
-            // models answer to the label they were shown (15) as often as to the title (Practice Q15)
-            chunk_solved.retain_mut(|s| match todo.iter().find(|q| [&q.title, &q.label].iter().any(|t| normalized(t) == normalized(&s.title))) {
-                Some(q) => {
-                    s.title = q.title.clone();
-                    // an answer with nothing in it (no language, code or text) counts as no answer
-                    s.answers.retain(|a| a.lang.is_some() || !a.code.trim().is_empty() || !a.answer.trim().is_empty());
-                    !s.answers.is_empty()
-                }
-                None => {
-                    tracing::warn!("[session {n}] dropped an answer to {:?}, which wasn't asked", s.title);
-                    false
-                }
-            });
-            let complete = chunk_solved.len() >= todo.len();
-            solved.extend(chunk_solved);
-            let answered = answered_titles(&solved);
-            todo.retain(|q| !answered.contains(&normalized(&q.title)));
-            if complete || todo.is_empty() { break }
-            tracing::warn!("[session {n}] no answer for {}, asking again", todo.iter().map(|q| q.title.as_str()).collect::<Vec<_>>().join(", "));
-        }
-    }
-    for s in &mut solved {
-        let base = group.questions.iter().find(|q| normalized(&q.title) == normalized(&s.title)).map(|q| q.label.clone());
-        for a in s.answers.iter_mut() {
-            if let Some(base) = &base { a.label = heading(base, &a.label) }
-        }
-    }
-    for a in solved.iter_mut().flat_map(|q| &mut q.answers) {
-        unescape_code(&mut a.code);
-        a.files.iter_mut().for_each(|f| unescape_code(&mut f.code));
-        if a.lang.as_deref().and_then(|l| configs.get(l)).is_some_and(|c| c.session) {
-            // `\G` already ends the statement, so a `;` after it runs an empty one ("No query specified")
-            a.code = a.code.replace("\\G;", "\\G");
-        }
-        if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
-    }
-
-    // written before sessions run, so a session can compile or run another answer's file
-    let mut names = HashSet::new();
-    let mut file_names = Vec::new();
-    for a in solved.iter().flat_map(|q| &q.answers) {
-        for f in &a.files {
-            let rel = Path::new(&f.name);
-            if !rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) { bail!("bad file name {:?}", f.name) }
-            std::fs::create_dir_all(dir.join(rel).parent().unwrap_or(dir))?;
-            std::fs::write(dir.join(rel), &f.code)?;
-        }
-        let name = a.lang.as_deref()
-            .filter(|l| configs.get(*l).is_some_and(|c| !c.session && !c.image))
-            .map(|l| java_class(l, &a.code).filter(|n| names.insert(n.clone())).unwrap_or_else(|| unique_name(&a.label, l, &mut names)));
-        if let Some(name) = &name {
-            std::fs::write(dir.join(name), &a.code)?;
-        }
-        file_names.push(name);
-    }
+    let mut solved = solve_questions(n, group, langs).await?;
+    solved.iter_mut().for_each(|s| prepare(s, group, configs));
 
     let ns = format!("sc{:06x}{n}_", *RUN_ID);
-    let mut transcripts = run_group_sessions(n, &ns, group, &solved, configs, dir).await;
-    // a session error the question isn't about is the model's mistake: fix those answers and rerun the group
-    for round in 1..=FIXES {
-        let broken: Vec<(usize, usize, String)> = solved.iter().enumerate()
-            .flat_map(|(qi, q)| q.answers.iter().enumerate().map(move |(ai, a)| (qi, ai, a, q)))
-            .enumerate()
-            .filter(|(_, (_, _, a, q))| !a.expects_error && !q.answers.iter().any(|x| x.label.contains("(corrected)")))
-            .filter_map(|(idx, (qi, ai, _, _))| Some((qi, ai, transcripts.get(&idx)?.join("\n"))))
-            .filter(|(_, _, out)| session_failed(out))
-            .collect();
-        if broken.is_empty() { break }
-        for (qi, ai, out) in broken {
-            let q_text = group.questions.iter().find(|x| x.title == solved[qi].title).map(question_text).unwrap_or_default();
-            let lang = &solved[qi].answers[ai].lang;
-            let before = solved.iter().enumerate()
-                .flat_map(|(i, q)| q.answers.iter().enumerate().map(move |(j, x)| ((i, j), x)))
-                .take_while(|(pos, _)| *pos < (qi, ai))
-                .filter(|(_, x)| &x.lang == lang)
-                .map(|(_, x)| x.code.as_str()).collect::<Vec<_>>().join("\n\n");
-            let a = &mut solved[qi].answers[ai];
-            tracing::warn!("[{}] session step failed, asking for a fix ({round}/{FIXES})", a.label);
-            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, &before, &a.code, &out))], false).await {
-                Ok(fixed) => {
-                    a.code = strip_fences(&fixed).to_string();
-                    if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
-                }
-                Err(e) => tracing::warn!("[{}] fix failed: {e:#}", a.label),
-            }
+    let mut runs = run_all(n, &ns, group, &mut solved, configs, dir, None, Runs::default()).await?;
+    let redone: Vec<(usize, Solved)> = review(n, group, &solved, &runs, configs, langs, doc_lang, dir, opts.check).await.into_iter()
+        .filter_map(|mut s| {
+            prepare(&mut s, group, configs);
+            let qi = solved.iter().position(|x| x.title == s.title)?;
+            let kept = keeps_kind(&solved[qi], &s, configs);
+            if !kept { tracing::warn!("[session {n}] the redo of {} changed what kind of answer it is, keeping the original", s.title) }
+            kept.then_some((qi, s))
+        })
+        .collect();
+    if !redone.is_empty() {
+        let broken_before: HashMap<usize, bool> = redone.iter().map(|(qi, _)| (*qi, broken(&solved, *qi, &runs, configs))).collect();
+        let mut originals = HashMap::new();
+        for (qi, s) in redone {
+            originals.insert(qi, std::mem::replace(&mut solved[qi], s));
         }
-        transcripts = run_group_sessions(n, &ns, group, &solved, configs, dir).await;
+        let changed: HashSet<usize> = originals.keys().copied().collect();
+        count(&STATS.redone, changed.len());
+        runs = run_all(n, &ns, group, &mut solved, configs, dir, Some(&changed), runs).await?;
+        // a redo that breaks what used to run is worse than the original
+        let worse: HashSet<usize> = changed.into_iter().filter(|qi| !broken_before[qi] && broken(&solved, *qi, &runs, configs)).collect();
+        if !worse.is_empty() {
+            let titles: Vec<&str> = worse.iter().map(|qi| solved[*qi].title.as_str()).collect();
+            tracing::warn!("[session {n}] review: the redo of {} broke it, keeping the original", titles.join(", "));
+            for qi in &worse {
+                solved[*qi] = originals.remove(qi).expect("replaced above");
+            }
+            runs = run_all(n, &ns, group, &mut solved, configs, dir, Some(&worse), runs).await?;
+        }
     }
+    let Runs { transcripts, outputs, images } = runs;
+    count(&STATS.answers, solved.iter().map(|q| q.answers.len()).sum());
 
-    let answers: Vec<(&Solved, usize, &Answer)> = solved.iter()
-        .flat_map(|q| q.answers.iter().enumerate().map(move |(i, a)| (q, i, a)))
+    let answers: Vec<(usize, &Solved, usize, &Answer)> = solved.iter().enumerate()
+        .flat_map(|(qi, q)| q.answers.iter().enumerate().map(move |(i, a)| (qi, q, i, a)))
         .collect();
     let mut items = Vec::new();
     let group_code = answers.iter()
-        .flat_map(|(_, _, a)| a.files.iter().map(|f| format!("{}:\n{}", f.name, f.code)).chain(Some(format!("{}:\n{}", a.label, a.code))))
+        .flat_map(|(.., a)| a.files.iter().map(|f| format!("{}:\n{}", f.name, f.code)).chain(Some(format!("{}:\n{}", a.heading, a.code))))
         .collect::<Vec<_>>().join("\n\n");
 
-    for (idx, (q, i, a)) in answers.iter().enumerate() {
+    for (idx, (qi, q, i, a)) in answers.iter().enumerate() {
         let question = group.questions.iter().find(|x| x.title == q.title);
         let mut term = opts.term.clone();
         term.no_title_bar = *i > 0;
         let mut item = PackItem {
             // a corrected answer continues under the heading of the one it corrects
-            heading: Some(a.label.replace(" (corrected)", "")),
+            heading: Some(a.heading.replace(" (corrected)", "")),
             content: a.code.clone(),
             answer: plain_text(&a.answer),
             question: question.filter(|_| opts.questions && *i == 0).map(question_text).unwrap_or_default(),
             ..Default::default()
         };
         let mut status = Status::Done;
-        // some models write the JSON null as the string "null"
-        let output = match a.lang.as_deref().filter(|l| !matches!(*l, "" | "null" | "none")) {
+        let output = match a.lang.as_deref() {
             None => None,
             Some(lang) => match configs.get(lang) {
                 None => {
-                    tracing::warn!("[{}] language {lang} isn't configured, no screenshot", a.label);
+                    tracing::warn!("[{}] language {lang} isn't configured, no screenshot", a.heading);
                     status = Status::NoScreenshot;
                     None
                 }
                 Some(cfg) if cfg.image => {
-                    match render_diagram(cfg, dir, &unique_name(&a.label, lang, &mut names), &a.code).await {
-                        Ok(png) => {
-                            let img = image::load_from_memory(&png)?;
-                            item.shots = vec![Shot { width: img.width(), height: img.height(), bytes: png }];
+                    match images.get(&(*qi, *i)) {
+                        Some(Ok(png)) => {
+                            let img = image::load_from_memory(png)?;
+                            item.shots = vec![Shot { width: img.width(), height: img.height(), bytes: png.clone() }];
                             if cfg.hide_code { item.content.clear(); }
                         }
-                        Err(e) => {
-                            item.answer = format!("{}\n[failed to render: {e:#}]", item.answer).trim().to_string();
+                        failed => {
+                            let e = failed.and_then(|r| r.as_ref().err()).map_or("not drawn", String::as_str);
+                            item.answer = format!("{}\n[failed to render: {e}]", item.answer).trim().to_string();
                             status = Status::NoScreenshot;
                         }
                     }
@@ -422,45 +416,16 @@ async fn solve_group(
                         Some(tidy_paths(&steps.join("\n"), dir))
                     }
                 }
-                Some(_) if session_uses(&answers, configs, file_names[idx].as_deref()) => None,
-                Some(_) => {
-                    let filename = file_names[idx].clone().context("file answer wasn't written")?;
-                    let path = dir.join(&filename);
-                    let stdin = Some(&a.stdin).filter(|s| !s.is_empty()).map(String::as_str);
-                    let (mut cmd, mut out, mut exit_err) = crate::pack::run_with_input(&path, dir, &filename, &a.code, stdin, &a.args, None, opts.ai_input).await;
-                    // a failing given program is followed by its "(corrected)" answer, so only our own crashes are repaired
-                    let has_correction = q.answers.iter().any(|x| x.label.contains("(corrected)"));
-                    if !has_correction && !a.expects_error {
-                        let q_text = question.map(question_text).unwrap_or_default();
-                        let (mut code, mut error) = (a.code.clone(), format!("$ {cmd}\n{out}"));
-                        // only a fix that runs cleanly replaces the answer, so a bad fix can't make it worse
-                        for attempt in 1..=FIXES {
-                            if !exit_err && !crashed(&out) { break }
-                            tracing::warn!("[{}] program failed, asking for a fix ({attempt}/{FIXES})", a.label);
-                            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, "", &code, &error))], false).await {
-                                Ok(fixed) => {
-                                    code = strip_fences(&fixed).to_string();
-                                    std::fs::write(&path, &code)?;
-                                    let run = crate::pack::run_with_input(&path, dir, &filename, &code, stdin, &a.args, None, opts.ai_input).await;
-                                    error = format!("$ {}\n{}", run.0, run.1);
-                                    if !run.2 && !crashed(&run.1) {
-                                        (cmd, out, exit_err) = run;
-                                        item.content = code.clone();
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("[{}] fix failed: {e:#}", a.label);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if full_screen(&out) && stdin.is_some() { None } else {
-                        let out = tidy_paths(&if full_screen(&out) { final_screen(&out) } else { out }, dir);
-                        item.shots = crate::pack::screenshots(Some(&cmd), &out, &term, opts.trim)?;
+                Some(_) => match outputs.get(&(*qi, *i)) {
+                    // a session in the group builds and runs this file itself
+                    None => None,
+                    Some((_, out)) if full_screen(out) && !a.stdin.is_empty() => None,
+                    Some((cmd, out)) => {
+                        let out = tidy_paths(&if full_screen(out) { final_screen(out) } else { out.clone() }, dir);
+                        item.shots = crate::pack::screenshots(Some(cmd), &out, &term, opts.trim)?;
                         Some(out)
                     }
-                }
+                },
             },
         };
         // code already visible in the screenshot (typed at a prompt, cat'ed) isn't repeated above it
@@ -483,15 +448,15 @@ async fn solve_group(
                     // both end up below the screenshot, and the after-run text already answers it
                     item.answer.clear();
                 }
-                Err(e) => tracing::warn!("[{}] written answer failed: {e:#}", a.label),
+                Err(e) => tracing::warn!("[{}] written answer failed: {e:#}", a.heading),
             }
         }
         if item.content.is_empty() && item.answer.is_empty() && item.answer_after.is_empty() && item.shots.is_empty() {
             tracing::warn!("[{}] nothing to show (lang {:?}, {} code lines, {} files, {} session steps), left out",
-                a.label, a.lang, a.code.lines().count(), a.files.len(), transcripts.get(&idx).map_or(0, Vec::len));
+                a.heading, a.lang, a.code.lines().count(), a.files.len(), transcripts.get(&idx).map_or(0, Vec::len));
             status = Status::Empty;
         }
-        items.push((item, status, a.label.clone(), q.title.clone()));
+        items.push((item, status, a.heading.clone(), q.title.clone()));
     }
     let answered = answered_titles(&solved);
     for q in group.questions.iter().filter(|q| !answered.contains(&normalized(&q.title))) {
@@ -499,6 +464,499 @@ async fn solve_group(
         items.push((item, Status::Failed, q.label.clone(), q.title.clone()));
     }
     Ok(items)
+}
+
+/// Asks for the group's answers a few questions at a time, since big groups in one call outlast gateway timeouts.
+async fn solve_questions(n: usize, group: &Group, langs: &str) -> Result<Vec<Solved>> {
+    let mut solved: Vec<Solved> = Vec::new();
+    for chunk in group.questions.chunks(QUESTIONS_PER_CALL) {
+        let mut todo: Vec<&Question> = chunk.iter().collect();
+        // models sometimes answer only some of the questions; ask again for the rest
+        for attempt in 0..=crate::ai::max_retries() {
+            let part = serde_json::to_string_pretty(&serde_json::json!({"setup": group.setup, "questions": todo}))?;
+            let earlier = if solved.is_empty() { String::new() } else { serde_json::to_string(&solved)? };
+            let mut chunk_solved: Vec<Solved> = ask_json(Tier::Mid, &[Part::Text(solve_prompt(&part, &earlier, langs))]).await
+                .context("solving")?;
+            keep_asked(n, &mut chunk_solved, &todo);
+            let complete = chunk_solved.len() >= todo.len();
+            solved.extend(chunk_solved);
+            let answered = answered_titles(&solved);
+            todo.retain(|q| !answered.contains(&normalized(&q.title)));
+            if complete || todo.is_empty() || attempt == crate::ai::max_retries() { break }
+            count(&STATS.asked_again, 1);
+            tracing::warn!("[session {n}] no answer for {}, asking again {}/{}", todo.iter().map(|q| q.title.as_str()).collect::<Vec<_>>().join(", "), attempt + 1, crate::ai::max_retries());
+        }
+    }
+    Ok(solved)
+}
+
+/// Keeps replies to the asked questions, under their exact titles, without empty answers.
+fn keep_asked(n: usize, replies: &mut Vec<Solved>, asked: &[&Question]) {
+    // models sometimes return the format example or a question nobody asked
+    // models answer to the label they were shown (15) as often as to the title (Practice Q15)
+    replies.retain_mut(|s| match asked.iter().find(|q| [&q.title, &q.label].iter().any(|t| normalized(t) == normalized(&s.title))) {
+        Some(q) => {
+            s.title = q.title.clone();
+            // an answer with nothing in it (no language, code or text) counts as no answer
+            s.answers.retain(|a| a.lang.is_some() || !a.code.trim().is_empty() || !a.answer.trim().is_empty());
+            !s.answers.is_empty()
+        }
+        None => {
+            tracing::warn!("[session {n}] dropped an answer to {:?}, which wasn't asked", s.title);
+            false
+        }
+    });
+    // models sometimes split one question into an entry per part
+    let mut merged: Vec<Solved> = Vec::new();
+    for s in replies.drain(..) {
+        match merged.iter_mut().find(|m| m.title == s.title) {
+            Some(m) => m.answers.extend(s.answers),
+            None => merged.push(s),
+        }
+    }
+    *replies = merged;
+}
+
+/// Headings, code the model escaped or mangled, and languages it got wrong.
+fn prepare(s: &mut Solved, group: &Group, configs: &HashMap<String, LangConfig>) {
+    let question = group.questions.iter().find(|q| normalized(&q.title) == normalized(&s.title));
+    // " (corrected)" only follows the answer it corrects
+    if s.answers.iter().all(|a| a.label.ends_with(" (corrected)")) {
+        s.answers.iter_mut().for_each(|a| a.label = a.label.trim_end_matches(" (corrected)").to_string());
+    }
+    // part headings only when the question has parts that get separate answers, never a lone 12(b)
+    let own = s.answers.iter().filter(|a| !a.label.ends_with(" (corrected)")).count();
+    let split = question.is_some_and(|q| !q.parts.is_empty()) && own > 1;
+    for a in &mut s.answers {
+        (a.heading, a.slug) = match question {
+            Some(q) => (heading(&q.label, &a.label, split), heading(&q.label, &a.label, own > 1)),
+            None => (a.label.clone(), a.label.clone()),
+        };
+        unescape_code(&mut a.code);
+        a.files.iter_mut().for_each(|f| unescape_code(&mut f.code));
+        // code quoted from the question is given code, shown as it runs: its errors are the point
+        let code = normalized(&a.code);
+        if code.len() >= 20 && !a.label.ends_with(" (corrected)") && question.is_some_and(|q| normalized(&question_text(q)).contains(&code)) {
+            a.expects_error = true;
+        }
+        // some models write the JSON null as the string "null"
+        a.lang = a.lang.take().filter(|l| !matches!(l.as_str(), "" | "null" | "none"));
+        if a.lang.is_none() {
+            a.lang = guess_lang(&a.code).filter(|l| configs.contains_key(*l)).map(String::from);
+        }
+        let cfg = a.lang.as_deref().and_then(|l| configs.get(l));
+        // nothing to run, or keys typed into an editor: a written answer, never a screenshot
+        if a.code.trim().is_empty() && a.files.is_empty() || cfg.is_some_and(|c| !c.session && !c.image) && opens_editor(&a.code) {
+            a.lang = None;
+        }
+        if let Some(c) = cfg.filter(|c| c.session) {
+            // `\G` already ends the statement, so a `;` after it runs an empty one ("No query specified")
+            a.code = a.code.replace("\\G;", "\\G");
+            a.code = without_comments(&a.code, c);
+        }
+        if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
+    }
+}
+
+/// Writes every answer's files and each file answer, before sessions run, so a session can compile or
+/// run another answer's file. Returns the names taken and each file answer's name by answer index.
+fn write_files(solved: &[Solved], dir: &Path, configs: &HashMap<String, LangConfig>) -> Result<(HashSet<String>, Vec<Option<String>>)> {
+    let mut names = HashSet::new();
+    let mut file_names = Vec::new();
+    for a in solved.iter().flat_map(|q| &q.answers) {
+        for f in &a.files {
+            let rel = Path::new(&f.name);
+            if !rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) { bail!("bad file name {:?}", f.name) }
+            std::fs::create_dir_all(dir.join(rel).parent().unwrap_or(dir))?;
+            std::fs::write(dir.join(rel), &f.code)?;
+        }
+        let name = a.lang.as_deref()
+            .filter(|l| configs.get(*l).is_some_and(|c| !c.session && !c.image))
+            .map(|l| java_class(l, &a.code).filter(|n| names.insert(n.clone())).unwrap_or_else(|| unique_name(&a.slug, l, &mut names)));
+        if let Some(name) = &name {
+            std::fs::write(dir.join(name), &a.code)?;
+        }
+        file_names.push(name);
+    }
+    Ok((names, file_names))
+}
+
+/// What running a group left: every answer's output and drawing.
+#[derive(Default)]
+struct Runs {
+    /// Step transcripts by answer index.
+    transcripts: HashMap<usize, Vec<String>>,
+    /// (command, output) by (question, answer) index.
+    outputs: HashMap<(usize, usize), (String, String)>,
+    /// PNG or why it failed, by (question, answer) index.
+    images: HashMap<(usize, usize), Result<Vec<u8>, String>>,
+}
+
+/// Writes the group's files and runs every session (they share state), then the file answers and
+/// diagrams of the questions in `only`, or all of them; `previous` keeps the rest.
+#[allow(clippy::too_many_arguments)]
+async fn run_all(
+    n: usize,
+    ns: &str,
+    group: &Group,
+    solved: &mut [Solved],
+    configs: &HashMap<String, LangConfig>,
+    dir: &Path,
+    only: Option<&HashSet<usize>>,
+    previous: Runs,
+) -> Result<Runs> {
+    let (mut names, file_names) = write_files(solved, dir, configs)?;
+    let written = snapshot(dir);
+    let transcripts = run_sessions_fixed(n, ns, group, solved, configs, dir, &written).await;
+    let Runs { mut outputs, mut images, .. } = previous;
+    if let Some(only) = only {
+        outputs.retain(|(qi, _), _| !only.contains(qi));
+        images.retain(|(qi, _), _| !only.contains(qi));
+    }
+    outputs.extend(run_files(solved, group, configs, dir, &file_names, only).await?);
+    for (qi, q) in solved.iter().enumerate().filter(|(qi, _)| only.is_none_or(|o| o.contains(qi))) {
+        for (ai, a) in q.answers.iter().enumerate() {
+            let Some((lang, cfg)) = a.lang.as_deref().and_then(|l| Some((l, configs.get(l)?))).filter(|(_, c)| c.image) else { continue };
+            let png = render_diagram(cfg, dir, &unique_name(&a.slug, lang, &mut names), &a.code).await;
+            images.insert((qi, ai), png.map_err(|e| format!("{e:#}")));
+        }
+    }
+    Ok(Runs { transcripts, outputs, images })
+}
+
+/// An answer to question `qi` crashed, failed or printed nothing without meaning to.
+fn broken(solved: &[Solved], qi: usize, runs: &Runs, configs: &HashMap<String, LangConfig>) -> bool {
+    let start: usize = solved[..qi].iter().map(|q| q.answers.len()).sum();
+    solved[qi].answers.iter().enumerate().filter(|(_, a)| !a.expects_error).any(|(ai, a)| {
+        let cfg = a.lang.as_deref().and_then(|l| configs.get(l));
+        if cfg.is_some_and(|c| c.session) {
+            runs.transcripts.get(&(start + ai)).is_some_and(|t| session_failed(&t.join("\n")))
+        } else if cfg.is_some_and(|c| c.image) {
+            runs.images.get(&(qi, ai)).is_some_and(Result::is_err)
+        } else {
+            runs.outputs.get(&(qi, ai)).is_some_and(|(_, out)| out.trim().is_empty() || crashed(out))
+        }
+    })
+}
+
+/// Runs the group's sessions; a session error the question isn't about is the model's mistake,
+/// so those answers are fixed and the group rerun. Returns each answer's step transcripts by answer index.
+async fn run_sessions_fixed(n: usize, ns: &str, group: &Group, solved: &mut [Solved], configs: &HashMap<String, LangConfig>, dir: &Path, written: &HashSet<PathBuf>) -> HashMap<usize, Vec<String>> {
+    prune(dir, written);
+    let mut transcripts = run_group_sessions(n, ns, group, solved, configs, dir).await;
+    for round in 1..=FIXES {
+        let broken: Vec<(usize, usize, String)> = solved.iter().enumerate()
+            .flat_map(|(qi, q)| q.answers.iter().enumerate().map(move |(ai, a)| (qi, ai, a, q)))
+            .enumerate()
+            .filter(|(_, (_, _, a, q))| !a.expects_error && !q.answers.iter().any(|x| x.label.contains("(corrected)")))
+            .filter_map(|(idx, (qi, ai, _, _))| Some((qi, ai, transcripts.get(&idx)?.join("\n"))))
+            .filter(|(_, _, out)| session_failed(out))
+            .collect();
+        if broken.is_empty() { break }
+        for (qi, ai, out) in broken {
+            let q_text = group.questions.iter().find(|x| x.title == solved[qi].title).map(question_text).unwrap_or_default();
+            let lang = &solved[qi].answers[ai].lang;
+            let before = solved.iter().enumerate()
+                .flat_map(|(i, q)| q.answers.iter().enumerate().map(move |(j, x)| ((i, j), x)))
+                .take_while(|(pos, _)| *pos < (qi, ai))
+                .filter(|(_, x)| &x.lang == lang)
+                .map(|(_, x)| x.code.as_str()).collect::<Vec<_>>().join("\n\n");
+            let a = &mut solved[qi].answers[ai];
+            count(&STATS.fixes, 1);
+            tracing::warn!("[{}] session step failed, asking for a fix ({round}/{FIXES})", a.heading);
+            match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, &before, &a.code, &out))], false).await {
+                Ok(fixed) => {
+                    a.code = strip_fences(&fixed).to_string();
+                    if let Some(c) = a.lang.as_deref().and_then(|l| configs.get(l)) { a.code = without_comments(&a.code, c) }
+                    if a.lang.as_deref() == Some("mysql") { a.code = with_delimiters(&a.code) }
+                }
+                Err(e) => tracing::warn!("[{}] fix failed: {e:#}", a.heading),
+            }
+        }
+        prune(dir, written);
+        transcripts = run_group_sessions(n, ns, group, solved, configs, dir).await;
+    }
+    transcripts
+}
+
+/// Models comment typed code anyway, and each comment line would show as its own step.
+fn without_comments(code: &str, cfg: &LangConfig) -> String {
+    code.lines().filter(|l| !cfg.comments.iter().any(|m| l.trim_start().starts_with(m.as_str()))).collect::<Vec<_>>().join("\n")
+}
+
+/// Every path under `dir`, without following links.
+fn snapshot(dir: &Path) -> HashSet<PathBuf> {
+    let mut paths = HashSet::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) { todo.push(entry.path()) }
+            paths.insert(entry.path());
+        }
+    }
+    paths
+}
+
+/// Removes what earlier runs left in `dir`, so a rerun starts from the files in `keep` only.
+fn prune(dir: &Path, keep: &HashSet<PathBuf>) {
+    for path in snapshot(dir).into_iter().filter(|p| !keep.contains(p)) {
+        let is_dir = std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir());
+        let _ = if is_dir { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+    }
+}
+
+/// Runs each file answer that no session builds itself (of the questions in `only`, when given) and
+/// repairs crashes that aren't the point of the question; only a fix that runs cleanly replaces the
+/// code, so a bad fix can't make it worse. Returns (command, output) by (question, answer) index.
+async fn run_files(
+    solved: &mut [Solved],
+    group: &Group,
+    configs: &HashMap<String, LangConfig>,
+    dir: &Path,
+    file_names: &[Option<String>],
+    only: Option<&HashSet<usize>>,
+) -> Result<HashMap<(usize, usize), (String, String)>> {
+    let positions: Vec<(usize, usize)> = solved.iter().enumerate()
+        .flat_map(|(qi, q)| (0..q.answers.len()).map(move |ai| (qi, ai)))
+        .collect();
+    let mut outputs = HashMap::new();
+    for (&(qi, ai), filename) in positions.iter().zip(file_names) {
+        let Some(filename) = filename else { continue };
+        if only.is_some_and(|o| !o.contains(&qi)) || session_uses(solved, configs, filename) { continue }
+        let q_text = group.questions.iter().find(|x| x.title == solved[qi].title).map(question_text).unwrap_or_default();
+        // a failing given program is followed by its "(corrected)" answer, so only our own crashes are repaired
+        let has_correction = solved[qi].answers.iter().any(|x| x.label.contains("(corrected)"));
+        let a = &mut solved[qi].answers[ai];
+        let path = dir.join(filename);
+        let stdin = Some(a.stdin.clone()).filter(|s| !s.is_empty());
+        // the solving model already gave the stdin; a second model guessing it types prose into the program
+        let (mut cmd, mut out, mut exit_err) = crate::pack::run_with_input(&path, dir, filename, &a.code, stdin.as_deref(), &a.args, None, AiInput::Never).await;
+        if !has_correction && !a.expects_error {
+            let (mut code, mut error) = (a.code.clone(), format!("$ {cmd}\n{out}"));
+            for attempt in 1..=FIXES {
+                if !exit_err && !crashed(&out) { break }
+                count(&STATS.fixes, 1);
+                tracing::warn!("[{}] program failed, asking for a fix ({attempt}/{FIXES})", a.heading);
+                match ask(Tier::Mid, &[Part::Text(fix_prompt(&q_text, "", &code, &error))], false).await {
+                    Ok(fixed) => {
+                        code = strip_fences(&fixed).to_string();
+                        std::fs::write(&path, &code)?;
+                        let run = crate::pack::run_with_input(&path, dir, filename, &code, stdin.as_deref(), &a.args, None, AiInput::Never).await;
+                        error = format!("$ {}\n{}", run.0, run.1);
+                        if !run.2 && !crashed(&run.1) {
+                            (cmd, out, exit_err) = run;
+                            a.code = code.clone();
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("[{}] fix failed: {e:#}", a.heading);
+                        break;
+                    }
+                }
+            }
+            std::fs::write(&path, &a.code)?;
+        }
+        if out.trim().is_empty() { tracing::warn!("[{}] the run printed nothing", a.heading) }
+        outputs.insert((qi, ai), (cmd, out));
+    }
+    Ok(outputs)
+}
+
+/// Finds questions whose answers ran wrong (printed nothing or only 0, a missing file or argument, still
+/// fail after fixes, fewer answers than parts, answered both whole and per part, not in the document's
+/// language, or graded bad by `--check`) and has the model redo just those, told what went wrong.
+/// Returns the redone questions.
+#[allow(clippy::too_many_arguments)]
+async fn review(
+    n: usize,
+    group: &Group,
+    solved: &[Solved],
+    runs: &Runs,
+    configs: &HashMap<String, LangConfig>,
+    langs: &str,
+    doc_lang: Option<&str>,
+    dir: &Path,
+    check: Option<f32>,
+) -> Vec<Solved> {
+    const SHOWN: usize = 3000;
+    let shown = |out: &str| -> String {
+        let out = tidy_paths(&if full_screen(out) { final_screen(out) } else { out.to_string() }, dir).replace('\r', "");
+        out.chars().take(SHOWN).collect()
+    };
+    let mut idx = 0;
+    let mut entries: Vec<Entry> = Vec::new();
+    for (qi, q) in solved.iter().enumerate() {
+        let mut problems = Vec::new();
+        let parted = |a: &&Answer| a.label.trim_end_matches(" (corrected)").contains('.');
+        let own: Vec<&Answer> = q.answers.iter().filter(|a| !a.label.ends_with(" (corrected)")).collect();
+        if own.iter().any(parted) && !own.iter().all(parted) {
+            problems.push("it is answered both as a whole and per part: give one answer per part".to_string());
+        }
+        // written and session answers get one answer per part, so fewer means parts were skipped
+        let parts = group.questions.iter().find(|x| x.title == q.title).map_or(0, |x| x.parts.len());
+        let per_part = q.answers.iter().all(|a| a.lang.as_deref().and_then(|l| configs.get(l)).is_none_or(|c| c.session));
+        if per_part && parts > 1 && own.len() < parts {
+            problems.push(format!("it has {parts} parts but only {} answer(s): answer every part, one answer per part", own.len()));
+        }
+        let mut answers = Vec::new();
+        let mut pictures = Vec::new();
+        for (ai, a) in q.answers.iter().enumerate() {
+            let cfg = a.lang.as_deref().and_then(|l| configs.get(l));
+            let printed = match cfg {
+                None => "(a written answer, not run)".to_string(),
+                Some(c) if c.image => match runs.images.get(&(qi, ai)) {
+                    Some(Ok(png)) => {
+                        pictures.push(png.clone());
+                        "(drawn: the next attached picture)".to_string()
+                    }
+                    _ => "(failed to draw)".to_string(),
+                },
+                Some(c) if c.session => {
+                    let out = runs.transcripts.get(&idx).map(|t| t.join("\n")).unwrap_or_default();
+                    if !a.expects_error && session_failed(&out) { problems.push(format!("{} still fails after fixes", a.heading)) }
+                    shown(&out)
+                }
+                Some(_) => match runs.outputs.get(&(qi, ai)) {
+                    None => "(built and run by a session answer)".to_string(),
+                    Some((cmd, out)) => {
+                        if !a.expects_error {
+                            if let Some(p) = sketchy(out) { problems.push(format!("{}: {p}", a.heading)) }
+                        }
+                        shown(&format!("$ {cmd}\n{out}"))
+                    }
+                },
+            };
+            if let (Some(doc), Some(lang)) = (doc_lang, a.lang.as_deref()) {
+                if lang != doc && cfg.is_some_and(|c| !c.session && !c.image) {
+                    problems.push(format!("{} is written in {lang}, but the document's programs are {doc}: use {doc} unless the question asks for {lang}", a.heading));
+                }
+            }
+            answers.push(serde_json::json!({"label": a.label, "lang": a.lang, "code": a.code, "files": a.files.iter().map(|f| &f.name).collect::<Vec<_>>(),
+                "stdin": a.stdin, "args": a.args, "expects_error": a.expects_error, "answer": a.answer, "printed": printed}));
+            idx += 1;
+        }
+        entries.push((problems, answers, pictures));
+    }
+    if let Some(min) = check {
+        grade(n, group, solved, &mut entries, min).await;
+    }
+    let flagged: Vec<(usize, serde_json::Value)> = entries.into_iter().enumerate()
+        .filter(|(_, (problems, ..))| !problems.is_empty())
+        .map(|(qi, (problems, answers, _))| (qi, serde_json::json!({"title": solved[qi].title, "problems": problems, "answers": answers})))
+        .collect();
+
+    let mut set = JoinSet::new();
+    for chunk in flagged.chunks(QUESTIONS_PER_CALL) {
+        let titles: Vec<String> = chunk.iter().map(|(qi, _)| solved[*qi].title.clone()).collect();
+        let questions: Vec<&Question> = group.questions.iter().filter(|q| titles.contains(&q.title)).collect();
+        let checked: Vec<&serde_json::Value> = chunk.iter().map(|(_, c)| c).collect();
+        let first = chunk[0].0;
+        let (Ok(questions), Ok(checked), Ok(earlier)) = (
+            serde_json::to_string_pretty(&serde_json::json!({"setup": group.setup, "questions": questions})),
+            serde_json::to_string_pretty(&checked),
+            if first == 0 { Ok(String::new()) } else { serde_json::to_string(&solved[..first]) },
+        ) else { continue };
+        tracing::warn!("[session {n}] redoing {}: {}", titles.join(", "), chunk.iter().map(|(_, c)| c["problems"].to_string()).collect::<Vec<_>>().join("; "));
+        let prompt = review_prompt(&questions, &checked, &earlier, langs);
+        // a redo is the second chance after an answer already went wrong, so it gets the stronger model
+        set.spawn(async move { (titles, ask_json::<Vec<Solved>>(Tier::Smart, &[Part::Text(prompt)]).await) });
+    }
+    let mut redone: Vec<Solved> = Vec::new();
+    for (titles, reply) in set.join_all().await {
+        match reply {
+            Ok(mut replies) => {
+                let asked: Vec<&Question> = group.questions.iter().filter(|q| titles.contains(&q.title)).collect();
+                keep_asked(n, &mut replies, &asked);
+                for s in replies {
+                    if !redone.iter().any(|r| r.title == s.title) { redone.push(s) }
+                }
+            }
+            Err(e) => tracing::warn!("[session {n}] redo failed: {e:#}"),
+        }
+    }
+    redone
+}
+
+/// A question as `review` sees it: its problems, its answers with what they printed, and the pictures it drew.
+type Entry = (Vec<String>, Vec<serde_json::Value>, Vec<Vec<u8>>);
+
+/// `--check`: the SMART model grades every answer that ran, drew or was written, a few questions per call, and a
+/// bad grade at least `min` sure becomes a problem of its question.
+async fn grade(n: usize, group: &Group, solved: &[Solved], entries: &mut [Entry], min: f32) {
+    #[derive(Deserialize)]
+    struct Verdict {
+        title: String,
+        label: String,
+        verdict: String,
+        #[serde(default)]
+        confidence: f32,
+        #[serde(default)]
+        problem: String,
+    }
+    let shown = |printed: &serde_json::Value| printed.as_str().is_some_and(|p| !p.starts_with("(built"));
+    let gradable: Vec<usize> = (0..solved.len()).filter(|&qi| entries[qi].1.iter().any(|a| shown(&a["printed"]))).collect();
+    let mut set = JoinSet::new();
+    for chunk in gradable.chunks(QUESTIONS_PER_CALL) {
+        let titles: Vec<&String> = chunk.iter().map(|&qi| &solved[qi].title).collect();
+        let questions: Vec<&Question> = group.questions.iter().filter(|q| titles.contains(&&q.title)).collect();
+        let answers: Vec<serde_json::Value> = chunk.iter()
+            .map(|&qi| serde_json::json!({"title": solved[qi].title, "answers": entries[qi].1.iter().filter(|a| shown(&a["printed"])).collect::<Vec<_>>()}))
+            .collect();
+        let (Ok(questions), Ok(answers)) = (
+            serde_json::to_string_pretty(&serde_json::json!({"setup": group.setup, "questions": questions})),
+            serde_json::to_string_pretty(&answers),
+        ) else { continue };
+        let mut parts = vec![Part::Text(check_prompt(&questions, &answers))];
+        parts.extend(chunk.iter().flat_map(|&qi| entries[qi].2.iter().map(|png| Part::Image("image/png", png.clone()))));
+        set.spawn(async move { ask_json::<Vec<Verdict>>(Tier::Smart, &parts).await });
+    }
+    for reply in set.join_all().await {
+        let verdicts = match reply {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("[session {n}] check failed: {e:#}");
+                continue;
+            }
+        };
+        for v in verdicts {
+            let Some(qi) = solved.iter().position(|s| normalized(&s.title) == normalized(&v.title)) else { continue };
+            if v.verdict.trim().eq_ignore_ascii_case("good") {
+                count(&STATS.good, 1);
+                tracing::info!("[{}] check: good ({:.2})", v.label, v.confidence);
+                continue;
+            }
+            count(&STATS.bad, 1);
+            tracing::warn!("[{}] check: bad ({:.2}): {}", v.label, v.confidence, v.problem);
+            if v.confidence >= min {
+                entries[qi].0.push(format!("{}: {}", v.label, v.problem));
+            }
+        }
+    }
+}
+
+/// What a run's output shows went wrong, when the question isn't about an error.
+fn sketchy(out: &str) -> Option<&'static str> {
+    let text = out.trim();
+    let lower = text.to_lowercase();
+    if text.is_empty() {
+        Some("its run printed nothing")
+    } else if text == "0" {
+        Some("its run printed only 0, so there was nothing to work on")
+    } else if crashed(text) {
+        Some("it still crashes after fixes")
+    } else if text.contains("[Timeout after") {
+        Some("it timed out, waiting for input it was never given or running on: give it its stdin and let it finish")
+    } else if ["no such ", "does not exist", "usage:"].iter().any(|m| lower.contains(m)) {
+        Some("its run says a file, input or argument is missing: give it real ones, creating sample files first")
+    } else {
+        None
+    }
+}
+
+/// A redo keeps the question's kind of answer: no code where there was only text, no lost diagram.
+fn keeps_kind(old: &Solved, new: &Solved, configs: &HashMap<String, LangConfig>) -> bool {
+    let has = |s: &Solved, image: bool| s.answers.iter().any(|a| a.lang.as_deref().and_then(|l| configs.get(l)).is_some_and(|c| c.image == image));
+    (has(old, false) || !has(new, false)) && (!has(old, true) || has(new, true))
 }
 
 /// Reset, set up and run every session of the group, then clean up; nothing in between returns
@@ -551,9 +1009,21 @@ fn answered_titles(solved: &[Solved]) -> HashSet<String> {
 }
 
 /// A session in the group compiles or runs this file answer itself, so it is only shown.
-fn session_uses(answers: &[(&Solved, usize, &Answer)], configs: &HashMap<String, LangConfig>, file: Option<&str>) -> bool {
-    let Some(file) = file else { return false };
-    answers.iter().any(|(_, _, a)| a.lang.as_deref().and_then(|l| configs.get(l)).is_some_and(|c| c.session) && a.code.contains(file))
+fn session_uses(solved: &[Solved], configs: &HashMap<String, LangConfig>, file: &str) -> bool {
+    solved.iter().flat_map(|q| &q.answers).any(|a| a.lang.as_deref().and_then(|l| configs.get(l)).is_some_and(|c| c.session) && a.code.contains(file))
+}
+
+/// The language of code the model gave none: a Graphviz diagram or a script with a shebang.
+fn guess_lang(code: &str) -> Option<&'static str> {
+    let code = code.trim();
+    if ["digraph", "graph", "strict "].iter().any(|k| code.starts_with(k)) && code.ends_with('}') { return Some("dot") }
+    let shebang = code.lines().next()?.strip_prefix("#!")?.trim_end();
+    [("python", "py"), ("node", "js"), ("sh", "sh")].into_iter().find(|(k, _)| shebang.contains(k)).map(|(_, lang)| lang)
+}
+
+/// A script that opens an editor holds keys a person types, not something to run.
+fn opens_editor(code: &str) -> bool {
+    code.lines().any(|l| matches!(l.split_whitespace().next(), Some("vi" | "vim" | "nvim" | "nano" | "emacs")))
 }
 
 /// Runs each stretch of consecutive answers in the same session language as one session,
@@ -597,6 +1067,7 @@ async fn render_diagram(cfg: &LangConfig, dir: &Path, filename: &str, code: &str
             Err(e) if attempt > FIXES => return Err(e),
             Err(e) => e,
         };
+        count(&STATS.fixes, 1);
         tracing::warn!("[{filename}] render failed, asking for a fix ({attempt}/{FIXES}): {err:#}");
         code = strip_fences(&ask(Tier::Mid, &[Part::Text(fix_prompt("", "", &code, &format!("{err:#}")))], false).await?).to_string();
     }
@@ -706,9 +1177,10 @@ fn assign_labels(groups: &mut [Group]) {
 }
 
 /// The model's dotted label on the question's own (`2.2` → `2(b)`, `2.1.3` → `2(a)(iii)`), keeping a
-/// " (corrected)" suffix, so every document numbers its parts the same way.
-fn heading(base: &str, label: &str) -> String {
+/// " (corrected)" suffix, so every document numbers its parts the same way. Without `split`, just the question's.
+fn heading(base: &str, label: &str, split: bool) -> String {
     let (label, corrected) = label.strip_suffix(" (corrected)").map_or((label, ""), |l| (l, " (corrected)"));
+    if !split { return format!("{base}{corrected}") }
     let dotted = &label[label.find(|c: char| c.is_ascii_digit()).unwrap_or(label.len())..];
     let parts: String = dotted.split('.').skip(1)
         .map_while(|p| p.trim().parse::<usize>().ok().filter(|&n| n > 0))
@@ -823,7 +1295,10 @@ async fn ask_json<T: DeserializeOwned>(tier: Tier, parts: &[Part]) -> Result<T> 
         let reply = ask(tier, parts, true).await?;
         tracing::debug!("AI reply: {reply}");
         match parse_json(&reply) {
-            Err(e) if attempt < crate::ai::max_retries() => tracing::warn!("bad JSON from model, retry {}/{}: {e:#}", attempt + 1, crate::ai::max_retries()),
+            Err(e) if attempt < crate::ai::max_retries() => {
+                count(&STATS.bad_json, 1);
+                tracing::warn!("bad JSON from model, retry {}/{}: {e:#}", attempt + 1, crate::ai::max_retries());
+            }
             result => return result,
         }
     }

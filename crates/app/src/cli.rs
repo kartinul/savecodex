@@ -307,6 +307,11 @@ enum Commands {
         #[arg(long, default_value_t = 60)]
         max_pages: usize,
 
+        /// Have the SMART model grade every run and diagram (good or bad, how sure, what went wrong)
+        /// and redo the answers it grades bad at least this sure. Off unless given; alone it means 0.7.
+        #[arg(long, env = "SAVECODEX_CHECK", num_args = 0..=1, default_missing_value = "0.7", value_name = "CONFIDENCE")]
+        check: Option<f32>,
+
         #[command(flatten)]
         doc: DocArgs,
 
@@ -411,7 +416,7 @@ pub async fn run() -> Result<()> {
                 crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), doc.page_break, &opts, None, doc.jobs, recursive, doc.ai_input, !doc.no_trim).await?;
             }
         }
-        Commands::Solve { inputs, questions, max_pages, doc, shot, ai } => {
+        Commands::Solve { inputs, questions, max_pages, check, doc, shot, ai } => {
             ai.apply();
             let custom_cwd = shot.cwd.is_some();
             let mut term = shot.options();
@@ -442,11 +447,11 @@ pub async fn run() -> Result<()> {
                     doc_title: doc.doc_title.as_ref().map(|t| t.replace("{}", &name)),
                     doc_text: doc.doc_text.as_ref().map(|t| t.replace("{}", &name)),
                     page_break: doc.page_break,
-                    ai_input: doc.ai_input,
                     trim: !doc.no_trim,
                     jobs: doc.jobs,
                     questions,
                     max_pages,
+                    check,
                     sem: sem.clone(),
                     tag: if multi { name.clone() } else { String::new() },
                 };
@@ -460,6 +465,7 @@ pub async fn run() -> Result<()> {
                 }
             };
             results.sort_by_key(|(i, ..)| *i);
+            crate::solve::print_stats();
 
             if !multi {
                 return results.pop().map_or(Ok(()), |(.., r)| r.map(drop));

@@ -32,6 +32,9 @@ pub struct LangConfig {
     /// from the transcript), so code can only touch what its own session created.
     #[serde(default)]
     pub namespace: Vec<String>,
+    /// Line comment markers; session lines starting with one are dropped before typing.
+    #[serde(default)]
+    pub comments: Vec<String>,
     /// Advice for the AI on writing answers in this language.
     #[serde(default)]
     pub hint: Option<String>,
