@@ -20,7 +20,6 @@ It can also solve a whole assignment: give it the PDF and it writes the answers,
 ## Demo
 
 - Gemini key variant: <https://youtu.be/-i_L3jEiWxc>
-- Admin key variant: <https://youtu.be/8jD1Prdp1cc>
 
 ## Installation
 
@@ -67,13 +66,12 @@ savecodex pack lab5                   # → lab5_pack.docx
 
 ### `serve`
 
-Users pick a folder in the browser, paste their Gemini key (or the `ADMIN_PASSWORD` to use the server's AI) and get the DOCX.
+A web UI for both `solve` and `pack`: drop files, watch every question or file get written, run and screenshotted live, then download the DOCX. Everyone uses the server's AI config; users can paste their own OpenAI-compatible key, base URL and model instead (https only, public addresses only).
 
 | Option | Default | |
 |---|---|---|
 | `--port` | `7878` | |
 | `--host` | `127.0.0.1` | |
-| `--no-key` | off | Everyone uses the server's AI, no key needed. Handy locally, don't use it on a public server |
 | `--debug` | off | Debug logging |
 
 ### `solve`
@@ -183,7 +181,6 @@ Read from the shell or the first `.env` in the current directory or a parent. CL
 | `{TIER}_API_KEY`, `{TIER}_BASE_URL` | none | Needed for `openai` |
 | `GEMINI_API_KEY` | none | Gemini key, also the last fallback after agent CLIs |
 | `OLLAMA_HOST` | `http://localhost:11434` | |
-| `ADMIN_PASSWORD` | none | Lets web users use the server's AI |
 | `SAVECODEX_RETRIES` | `3` | `--retries` for a failed AI call |
 | `SAVECODEX_AGENT_JOBS` | no limit | Max calls at once per agent CLI |
 

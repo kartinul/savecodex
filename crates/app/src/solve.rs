@@ -10,6 +10,7 @@ use tokio::task::JoinSet;
 
 use crate::ai::{ask, Part, Tier};
 use crate::docx_gen::{PackItem, Shot};
+use crate::jobs::{Emitter, Event, Item};
 use crate::pack::AiInput;
 use crate::prompts::{after_run_prompt, check_prompt, extract_prompt, fix_prompt, review_prompt, solve_prompt};
 use crate::runner::{final_screen, full_screen, load_configurations, LangConfig};
@@ -103,6 +104,8 @@ pub struct SolveOptions {
     pub sem: Arc<Semaphore>,
     /// Prefix for progress lines when several documents run at once.
     pub tag: String,
+    /// Live progress for the web UI.
+    pub events: Option<Emitter>,
 }
 
 const QUESTIONS_PER_CALL: usize = 4;
@@ -187,6 +190,7 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     let stem = inputs[0].file_stem().and_then(|s| s.to_str()).unwrap_or("solved").to_string();
     let tag = if opts.tag.is_empty() { String::new() } else { format!("[{}] ", opts.tag) };
     let read = read_inputs(inputs, opts.max_pages)?;
+    if let Some(ev) = &opts.events { ev.send(Event::Reading { pages: read.images.len() / 2 }) }
     let work = tempfile::tempdir()?;
     // declared after `work`, so the container goes before its mounted dir does
     let _linux = crate::linux::Container::start(work.path()).await?;
@@ -212,6 +216,12 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
         .filter_map(|q| Some((q.title.clone(), text_pos(&doc, &q.text).or_else(|| title_pos(&doc, &q.title))?)))
         .collect();
     let total: usize = extracted.groups.iter().map(|g| g.questions.len()).sum();
+    if let Some(ev) = &opts.events {
+        let mut items: Vec<&Question> = extracted.groups.iter().flat_map(|g| &g.questions).collect();
+        items.sort_by_key(|q| question_pos.get(&q.title).copied().unwrap_or(usize::MAX));
+        let items = items.iter().map(|q| Item { id: q.title.clone(), title: q.text.trim().chars().take(300).collect() }).collect();
+        ev.send(Event::Found { items });
+    }
     let group_count = extracted.groups.len();
     println!("{tag}📝 {} question(s) in {} group(s), solving with {}", total, group_count, crate::ai::describe(Tier::Mid));
 
@@ -228,7 +238,7 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     for (n, group) in extracted.groups.into_iter().enumerate() {
         let dir = work.path().join(format!("g{}", n + 1));
         let (configs, langs, doc_lang, data_files, opts, tag) = (configs.clone(), langs.clone(), doc_lang.clone(), data_files.clone(), opts.clone(), tag.clone());
-        set.spawn(async move {
+        set.spawn(crate::ai::inherit(async move {
             tokio::time::sleep(std::time::Duration::from_millis(n as u64)).await;
             let _permit = opts.sem.acquire().await.expect("semaphore closed");
             let titles = group.questions.iter().map(|q| q.title.clone()).collect::<Vec<_>>().join(", ");
@@ -244,14 +254,17 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
                     let failed = if failed > 0 { format!(", {failed} failed") } else { String::new() };
                     tracing::info!("{progress} Done: {titles}, {} answer(s){failed} ({secs:.1}s)", items.len());
                 }
-                Err(e) => tracing::warn!("{progress} Failed: {titles} ({secs:.1}s): {e:#}"),
+                Err(e) => {
+                    tracing::warn!("{progress} Failed: {titles} ({secs:.1}s): {e:#}");
+                    if let Some(ev) = &opts.events { group.questions.iter().for_each(|q| ev.step(&q.title, "failed", format!("{e:#}"))) }
+                }
             }
             let first = group.questions.first().map(|q| q.title.clone()).unwrap_or_default();
             (n, result.unwrap_or_else(|e| {
                 let item = PackItem { heading: Some(titles.clone()), answer: format!("[solve failed: {e:#}]"), ..Default::default() };
                 vec![(item, Status::Failed, titles, first)]
             }))
-        });
+        }));
     }
     let mut results: Vec<_> = set.join_all().await;
     results.sort_by_key(|(n, _)| *n);
@@ -283,6 +296,9 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     let out = opts.output.clone().unwrap_or_else(|| PathBuf::from(format!("{stem}_solved"))).with_extension("docx");
     let title = opts.doc_title.clone().unwrap_or(stem);
     crate::docx_gen::generate_docx(&out, &title, opts.doc_text.as_deref(), &items, opts.page_break)?;
+    if let Some(ev) = &opts.events {
+        ev.done(out.file_name().map_or("solved.docx".into(), |n| n.to_string_lossy().into_owned()), out.clone());
+    }
     let summary = format!("{} done, {} failed{}, {} without output{} → {}", done,
         failed.len(), list(&failed), no_shot.len(), list(&no_shot), out.display());
     println!("{tag}Done: {summary}");
@@ -318,8 +334,11 @@ async fn solve_group(
     for file in data_files {
         std::fs::copy(file, dir.join(file.file_name().context("bad data file name")?))?;
     }
+    let ev = opts.events.as_ref();
+    if let Some(ev) = ev { group.questions.iter().for_each(|q| ev.step(&q.title, "writing", "")) }
     let mut solved = solve_questions(n, group, langs).await?;
     solved.iter_mut().for_each(|s| prepare(s, group, configs));
+    if let Some(ev) = ev { solved.iter().for_each(|s| send_code(ev, s, "running", "")) }
 
     let ns = format!("sc{:06x}{n}_", *RUN_ID);
     let mut runs = run_all(n, &ns, group, &mut solved, configs, dir, None, Runs::default()).await?;
@@ -339,6 +358,7 @@ async fn solve_group(
             originals.insert(qi, std::mem::replace(&mut solved[qi], s));
         }
         let changed: HashSet<usize> = originals.keys().copied().collect();
+        if let Some(ev) = ev { changed.iter().for_each(|qi| send_code(ev, &solved[*qi], "fixing", "found a problem, fixing it")) }
         count(&STATS.redone, changed.len());
         runs = run_all(n, &ns, group, &mut solved, configs, dir, Some(&changed), runs).await?;
         // a redo that breaks what used to run is worse than the original
@@ -456,6 +476,10 @@ async fn solve_group(
                 a.heading, a.lang, a.code.lines().count(), a.files.len(), transcripts.get(&idx).map_or(0, Vec::len));
             status = Status::Empty;
         }
+        if let Some(ev) = ev {
+            if let Some(out) = &output { ev.send(Event::Output { id: q.title.clone(), text: out.clone() }) }
+            item.shots.iter().for_each(|s| ev.shot(&q.title, s.bytes.clone()));
+        }
         items.push((item, status, a.heading.clone(), q.title.clone()));
     }
     let answered = answered_titles(&solved);
@@ -463,7 +487,21 @@ async fn solve_group(
         let item = PackItem { heading: Some(q.label.clone()), answer: "[solve failed: the model gave no answer]".into(), ..Default::default() };
         items.push((item, Status::Failed, q.label.clone(), q.title.clone()));
     }
+    if let Some(ev) = ev {
+        for q in &group.questions {
+            let ok = items.iter().any(|(_, st, _, t)| *t == q.title && matches!(st, Status::Done | Status::NoScreenshot));
+            if ok { ev.step(&q.title, "ok", "") } else { ev.step(&q.title, "failed", "no answer came out") }
+        }
+    }
     Ok(items)
+}
+
+/// The web UI's view of an answer: all its code (or written text) and what happens to it next.
+fn send_code(ev: &Emitter, s: &Solved, state: &'static str, note: &str) {
+    let written = s.answers.iter().all(|a| a.lang.is_none());
+    let code = s.answers.iter().map(|a| if a.lang.is_none() { a.answer.as_str() } else { a.code.as_str() }).collect::<Vec<_>>().join("\n\n");
+    ev.send(Event::Code { id: s.title.clone(), written, code });
+    ev.step(&s.title, state, note);
 }
 
 /// Asks for the group's answers a few questions at a time, since big groups in one call outlast gateway timeouts.
@@ -730,7 +768,7 @@ async fn run_files(
         let path = dir.join(filename);
         let stdin = Some(a.stdin.clone()).filter(|s| !s.is_empty());
         // the solving model already gave the stdin; a second model guessing it types prose into the program
-        let (mut cmd, mut out, mut exit_err) = crate::pack::run_with_input(&path, dir, filename, &a.code, stdin.as_deref(), &a.args, None, AiInput::Never).await;
+        let (mut cmd, mut out, mut exit_err) = crate::pack::run_with_input(&path, dir, filename, &a.code, stdin.as_deref(), &a.args, AiInput::Never, None).await;
         if !has_correction && !a.expects_error {
             let (mut code, mut error) = (a.code.clone(), format!("$ {cmd}\n{out}"));
             for attempt in 1..=FIXES {
@@ -741,7 +779,7 @@ async fn run_files(
                     Ok(fixed) => {
                         code = strip_fences(&fixed).to_string();
                         std::fs::write(&path, &code)?;
-                        let run = crate::pack::run_with_input(&path, dir, filename, &code, stdin.as_deref(), &a.args, None, AiInput::Never).await;
+                        let run = crate::pack::run_with_input(&path, dir, filename, &code, stdin.as_deref(), &a.args, AiInput::Never, None).await;
                         error = format!("$ {}\n{}", run.0, run.1);
                         if !run.2 && !crashed(&run.1) {
                             (cmd, out, exit_err) = run;
@@ -859,7 +897,7 @@ async fn review(
         tracing::warn!("[session {n}] redoing {}: {}", titles.join(", "), chunk.iter().map(|(_, c)| c["problems"].to_string()).collect::<Vec<_>>().join("; "));
         let prompt = review_prompt(&questions, &checked, &earlier, langs);
         // a redo is the second chance after an answer already went wrong, so it gets the stronger model
-        set.spawn(async move { (titles, ask_json::<Vec<Solved>>(Tier::Smart, &[Part::Text(prompt)]).await) });
+        set.spawn(crate::ai::inherit(async move { (titles, ask_json::<Vec<Solved>>(Tier::Smart, &[Part::Text(prompt)]).await) }));
     }
     let mut redone: Vec<Solved> = Vec::new();
     for (titles, reply) in set.join_all().await {
@@ -908,7 +946,7 @@ async fn grade(n: usize, group: &Group, solved: &[Solved], entries: &mut [Entry]
         ) else { continue };
         let mut parts = vec![Part::Text(check_prompt(&questions, &answers))];
         parts.extend(chunk.iter().flat_map(|&qi| entries[qi].2.iter().map(|png| Part::Image("image/png", png.clone()))));
-        set.spawn(async move { ask_json::<Vec<Verdict>>(Tier::Smart, &parts).await });
+        set.spawn(crate::ai::inherit(async move { ask_json::<Vec<Verdict>>(Tier::Smart, &parts).await }));
     }
     for reply in set.join_all().await {
         let verdicts = match reply {

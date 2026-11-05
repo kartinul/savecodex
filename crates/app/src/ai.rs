@@ -116,6 +116,24 @@ static ANSWERED_BY: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
 static AGENT_SLOTS: OnceLock<Vec<Arc<Semaphore>>> = OnceLock::new();
 static LAST_AGENT_START: OnceLock<tokio::sync::Mutex<Instant>> = OnceLock::new();
 
+tokio::task_local! {
+    /// A web user's own OpenAI-compatible key, used for every tier of their run.
+    static USER_AI: AiConfig;
+}
+
+/// Runs `fut` with the user's own AI config, or the server's when None.
+pub async fn with_user_ai<F: std::future::Future>(config: Option<AiConfig>, fut: F) -> F::Output {
+    match config {
+        Some(c) => USER_AI.scope(c, fut).await,
+        None => fut.await,
+    }
+}
+
+/// Keeps the caller's user AI config inside a spawned task.
+pub fn inherit<F: std::future::Future>(fut: F) -> impl std::future::Future<Output = F::Output> {
+    with_user_ai(USER_AI.try_with(Clone::clone).ok(), fut)
+}
+
 /// Values from CLI flags (e.g. `SMART_PROVIDER`), checked before the environment.
 pub fn set_overrides(values: HashMap<String, String>) {
     let _ = OVERRIDES.set(values);
@@ -144,9 +162,13 @@ pub fn provider_help() -> String {
 }
 
 impl AiConfig {
-    /// A Gemini API config with a user-supplied key (the web UI).
-    pub fn gemini(api_key: String, tier: Tier) -> Self {
+    fn gemini(api_key: String, tier: Tier) -> Self {
         Self { provider: Provider::Gemini, model: GEMINI_MODELS[tier as usize].into(), base_url: None, api_key, thinking: None, tier, auto: false }
+    }
+
+    /// An OpenAI-compatible config with a web user's own key.
+    pub fn openai(api_key: String, base_url: String, model: String) -> Self {
+        Self { provider: Provider::OpenAi, model, base_url: Some(base_url), api_key, thinking: None, tier: Tier::Mid, auto: false }
     }
 
     /// Agents keep FAST cheap unless thinking is set.
@@ -177,6 +199,9 @@ impl AiConfig {
 
 /// Configs to try for `tier`: CLI flags / env first, then every agent CLI on PATH, then `GEMINI_API_KEY`.
 pub fn resolve(tier: Tier) -> Result<Vec<AiConfig>> {
+    if let Ok(user) = USER_AI.try_with(|c| AiConfig { tier, ..c.clone() }) {
+        return Ok(vec![user]);
+    }
     resolve_with(tier, &var, &find_bin)
 }
 
@@ -273,12 +298,8 @@ pub async fn ask(tier: Tier, parts: &[Part], json_only: bool) -> Result<String> 
     Err(last_err.unwrap_or_else(|| anyhow!("every auto-detected agent already failed in this run")))
 }
 
-pub async fn generate_input(files: &[(&str, &str)], config: Option<&AiConfig>) -> Result<String> {
-    let parts = [Part::Text(input_generation_prompt(files))];
-    match config {
-        Some(c) => c.send(&parts, false).await,
-        None => ask(Tier::Fast, &parts, false).await,
-    }
+pub async fn generate_input(files: &[(&str, &str)]) -> Result<String> {
+    ask(Tier::Fast, &[Part::Text(input_generation_prompt(files))], false).await
 }
 
 async fn gemini(config: &AiConfig, parts: &[Part], json_only: bool) -> Result<String> {

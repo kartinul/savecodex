@@ -7,7 +7,5 @@ services:
     envVars:
       - key: PORT
         value: "10000"
-      - key: ADMIN_PASSWORD
-        sync: false
       - key: GEMINI_API_KEY
         sync: false

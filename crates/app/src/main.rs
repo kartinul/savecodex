@@ -2,6 +2,7 @@ mod cli;
 mod embed;
 mod routes;
 mod server;
+mod jobs;
 mod term_gen;
 pub mod runner;
 pub mod pack;

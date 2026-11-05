@@ -10,6 +10,7 @@ use tracing::info;
 use natord::compare;
 
 use crate::docx_gen::Shot;
+use crate::jobs::{Emitter, Event, Item};
 use crate::term_gen::TermGenOptions;
 
 // Builds are CPU-bound; running more than the CPU quota at once makes them hit the build timeout.
@@ -34,12 +35,12 @@ pub async fn run_pack(
     doc_text: Option<&str>,
     page_break: bool,
     opts: &crate::term_gen::TermGenOptions,
-    ai_config: Option<crate::ai::AiConfig>,
     jobs: usize,
     recursive: bool,
     ai_input: AiInput,
     trim: bool,
-) -> Result<()> {
+    events: Option<Emitter>,
+) -> Result<Option<PathBuf>> {
     tracing::debug!("run_pack: folder={:?} output={:?} extensions={:?} jobs={} recursive={}", folder, output, extensions, jobs, recursive);
     info!("Starting pack: {}", folder.display());
     let root = if folder.is_dir() { folder } else { folder.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")) };
@@ -104,7 +105,7 @@ pub async fn run_pack(
 
     if files.is_empty() {
         println!("No matching files found in {}", folder.display());
-        return Ok(());
+        return Ok(None);
     }
 
     files.sort_by(|a, b| {
@@ -114,12 +115,15 @@ pub async fn run_pack(
     });
 
     let total = files.len();
+    if let Some(ev) = &events {
+        let items = files.iter().enumerate().map(|(i, f)| Item { id: i.to_string(), title: display_name(f, folder) }).collect();
+        ev.send(Event::Found { items });
+    }
     println!("Processing {} file(s) — up to {} at a time", total, jobs);
     info!("Found {} files to process (concurrency: {})", total, jobs);
 
     let sem = Arc::new(Semaphore::new(jobs));
     let opts = Arc::new(opts.clone());
-    let ai_config = Arc::new(ai_config);
     let folder = Arc::new(folder.to_path_buf());
 
     // Pre-sized results vec; each slot filled by the task for that index.
@@ -129,14 +133,15 @@ pub async fn run_pack(
     for (idx, path) in files.into_iter().enumerate() {
         let sem = Arc::clone(&sem);
         let opts = Arc::clone(&opts);
-        let ai_config = Arc::clone(&ai_config);
         let folder = Arc::clone(&folder);
+        let events = events.clone();
 
-        set.spawn(async move {
+        set.spawn(crate::ai::inherit(async move {
             let _permit = sem.acquire().await.expect("semaphore closed");
-            let result = process_file(idx, total, &path, &folder, &opts, ai_config.as_ref().as_ref(), ai_input, trim).await;
+            let result = process_file(idx, total, &path, &folder, &opts, ai_input, trim, events.as_ref()).await;
+            if let (Err(e), Some(ev)) = (&result, &events) { ev.step(&idx.to_string(), "failed", format!("{e:#}")) }
             (idx, result)
-        });
+        }));
     }
 
     while let Some(join_res) = set.join_next().await {
@@ -155,7 +160,17 @@ pub async fn run_pack(
     info!("Wrote {}", out_docx.display());
     println!("Done → {}", out_docx.display());
 
-    Ok(())
+    Ok(Some(out_docx))
+}
+
+/// The path shown for a packed file; the file's own name when the pack target is the file itself.
+fn display_name(path: &Path, folder: &Path) -> String {
+    let rel = path.strip_prefix(folder).unwrap_or(path);
+    if rel.as_os_str().is_empty() {
+        path.file_name().unwrap_or(rel.as_os_str()).to_string_lossy().to_string()
+    } else {
+        rel.to_string_lossy().to_string()
+    }
 }
 
 async fn process_file(
@@ -164,23 +179,26 @@ async fn process_file(
     path: &Path,
     folder: &Path,
     opts: &crate::term_gen::TermGenOptions,
-    ai_config: Option<&crate::ai::AiConfig>,
     ai_input: AiInput,
     trim: bool,
+    events: Option<&Emitter>,
 ) -> Result<crate::docx_gen::PackItem> {
-    // When the pack target is the file itself, strip_prefix yields "" — fall back to the file name.
-    let rel = path.strip_prefix(folder).unwrap_or(path);
-    let filename = if rel.as_os_str().is_empty() {
-        path.file_name().unwrap_or(rel.as_os_str()).to_string_lossy().to_string()
-    } else {
-        rel.to_string_lossy().to_string()
-    };
+    let filename = display_name(path, folder);
     info!("[{}/{}] Starting: {}", idx + 1, total, filename);
+    let id = idx.to_string();
 
     let content = fs::read_to_string(path).context("Failed to read file")?;
+    if let Some(ev) = events {
+        ev.send(Event::Code { id: id.clone(), written: false, code: content.clone() });
+    }
     let t0 = std::time::Instant::now();
-    let (cmd, out, _) = run_with_input(path, folder, &filename, &content, None, &[], ai_config, ai_input).await;
+    let (cmd, out, _) = run_with_input(path, folder, &filename, &content, None, &[], ai_input, events.map(|ev| (ev, id.as_str()))).await;
     let shot = screenshot(Some(&cmd), &out, opts, trim)?;
+    if let Some(ev) = events {
+        ev.send(Event::Output { id: id.clone(), text: out.clone() });
+        ev.shot(&id, shot.bytes.clone());
+        ev.step(&id, "ok", "");
+    }
     info!("[{}/{}] Done: {} ({:.1}s)", idx + 1, total, filename, t0.elapsed().as_secs_f32());
 
     Ok(crate::docx_gen::PackItem { filename, content, shots: vec![shot], ..Default::default() })
@@ -195,8 +213,8 @@ pub async fn run_with_input(
     content: &str,
     given_input: Option<&str>,
     args: &[String],
-    ai_config: Option<&crate::ai::AiConfig>,
     ai_input: AiInput,
+    events: Option<(&Emitter, &str)>,
 ) -> (String, String, bool) {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let wants_ai = match ai_input {
@@ -211,7 +229,8 @@ pub async fn run_with_input(
         String::new()
     } else {
         tracing::debug!("[{}] Requesting AI input", filename);
-        match crate::ai::generate_input(&[(filename, content)], ai_config).await {
+        if let Some((ev, id)) = events { ev.step(id, "writing", "making up the input") }
+        match crate::ai::generate_input(&[(filename, content)]).await {
             Ok(t) => {
                 tracing::debug!("[{}] AI input ready", filename);
                 t
@@ -225,6 +244,7 @@ pub async fn run_with_input(
 
     tracing::debug!("[{}] Running via PTY (cwd: {})", filename, folder.display());
     let _slot = RUN_SLOTS.acquire().await.expect("semaphore closed");
+    if let Some((ev, id)) = events { ev.step(id, "running", "") }
     match crate::runner::run_file_in(path, if input_text.is_empty() { None } else { Some(&input_text) }, args, Some(folder)).await {
         Ok(r) => r,
         Err(e) => {

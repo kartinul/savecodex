@@ -17,7 +17,7 @@ dev: install
 	@cargo watch --version > /dev/null 2>&1 || cargo install cargo-watch
 	@trap 'kill 0' INT; \
 	  (cd frontend && bun run dev) & \
-	  cargo watch -q -c -x 'run -- serve --no-key' & \
+	  cargo watch -q -c -x 'run -- serve' & \
 	  wait
 
 clean:

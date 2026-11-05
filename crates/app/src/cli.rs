@@ -253,10 +253,6 @@ enum Commands {
         #[arg(long)]
         debug: bool,
 
-        /// Use the server's env AI config; users need no API key or admin password.
-        #[arg(long, env = "SAVECODEX_NO_KEY")]
-        no_key: bool,
-
         #[command(flatten)]
         ai: AiArgs,
     },
@@ -370,9 +366,9 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { host, port, debug: _, no_key, ai } => {
+        Commands::Serve { host, port, debug: _, ai } => {
             ai.apply();
-            server::start(&host, port, no_key).await?;
+            server::start(&host, port).await?;
         }
         Commands::Pack { folders, recursive, ext, doc, shot, ai } => {
             ai.apply();
@@ -413,7 +409,7 @@ pub async fn run() -> Result<()> {
                     println!("   ℹ️  Text: {}", text.replace('\n', "\\n"));
                 }
 
-                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), doc.page_break, &opts, None, doc.jobs, recursive, doc.ai_input, !doc.no_trim).await?;
+                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), doc.page_break, &opts, doc.jobs, recursive, doc.ai_input, !doc.no_trim, None).await?;
             }
         }
         Commands::Solve { inputs, questions, max_pages, check, doc, shot, ai } => {
@@ -454,6 +450,7 @@ pub async fn run() -> Result<()> {
                     check,
                     sem: sem.clone(),
                     tag: if multi { name.clone() } else { String::new() },
+                    events: None,
                 };
                 set.spawn(async move { (i, name, crate::solve::run_solve(&run, opts).await) });
             }
