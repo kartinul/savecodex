@@ -17,10 +17,6 @@ It can also solve a whole assignment: give it the PDF and it writes the answers,
   <img src="docs/solve-er.png" width="32%" alt="ER diagram">
 </p>
 
-## Demo
-
-- Gemini key variant: <https://youtu.be/-i_L3jEiWxc>
-
 ## Installation
 
 Grab a binary from [Releases](https://github.com/kartinul/savecodex/releases/latest):

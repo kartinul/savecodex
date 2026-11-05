@@ -423,8 +423,17 @@ async fn ollama(config: &AiConfig, parts: &[Part]) -> Result<String> {
     openai(&AiConfig { model, base_url: Some(format!("{base}/v1")), ..config.clone() }, parts).await
 }
 
+/// `https://host` → `https://host/v1`; a url with any path is kept as is.
+fn api_base(url: &str) -> String {
+    let url = url.trim_end_matches('/');
+    match reqwest::Url::parse(url) {
+        Ok(u) if u.path() == "/" => format!("{url}/v1"),
+        _ => url.to_string(),
+    }
+}
+
 async fn openai(config: &AiConfig, parts: &[Part]) -> Result<String> {
-    let url = format!("{}/chat/completions", config.base_url.as_deref().unwrap_or_default());
+    let url = format!("{}/chat/completions", api_base(config.base_url.as_deref().unwrap_or_default()));
     let mut body = json!({
         "model": config.model,
         "messages": [{"role": "user", "content": openai_parts(parts)}]

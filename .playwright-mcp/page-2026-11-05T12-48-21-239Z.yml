@@ -1,0 +1,84 @@
+- generic [ref=e3]:
+  - main [ref=e4]:
+    - button "$_ savecodex" [ref=e5] [cursor=pointer]
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e8]: "# what happens when you press solve"
+        - generic [ref=e9]:
+          - generic [ref=e10]: 1 read
+          - text: finds every task in your files
+        - generic [ref=e11]:
+          - generic [ref=e12]: 2 write
+          - text: writes an answer for each one
+        - generic [ref=e13]:
+          - generic [ref=e14]: 3 run
+          - text: runs it and takes a real terminal screenshot
+        - generic [ref=e15]:
+          - generic [ref=e16]: 4 pack
+          - text: puts code and screenshots into a word document
+      - figure "# your screenshots will look like this" [ref=e17]:
+        - img "Sample terminal screenshot"
+  - complementary "Panel" [ref=e19]:
+    - generic [ref=e20]:
+      - group "Mode" [ref=e21]:
+        - button "solve" [pressed] [ref=e22] [cursor=pointer]
+        - button "pack" [ref=e23] [cursor=pointer]
+      - button "Hide panel" [ref=e24] [cursor=pointer]: »
+    - heading "solve a document" [level=1] [ref=e25]
+    - generic [ref=e26]:
+      - generic [ref=e27]:
+        - strong [ref=e28]: drop files here
+        - generic [ref=e29]: pdf, docx, images, or paste
+      - button "browse" [ref=e30] [cursor=pointer]
+    - generic [ref=e31]:
+      - generic [ref=e32]: "# settings.toml"
+      - generic [ref=e33]:
+        - generic [ref=e34]:
+          - text: terminal
+          - 'note "how the terminal screenshots look: which computer, dark or light" [ref=e35]': "?"
+        - text: =
+        - button "\"windows-dark\"" [ref=e36] [cursor=pointer]
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - text: doc
+          - 'note "how the word file looks: fonts, headings, code boxes; edit makes your own" [ref=e39]': "?"
+        - text: =
+        - button "\"current\"" [ref=e40] [cursor=pointer]
+      - generic [ref=e41]:
+        - generic [ref=e42]:
+          - text: username
+          - note "your name in the terminal line, like user@laptop" [ref=e43]: "?"
+        - text: =
+        - generic [ref=e44]:
+          - text: "\""
+          - textbox "username" [ref=e45]: user
+          - text: "\""
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - text: hostname
+          - note "the computer name after the @ in the terminal line" [ref=e48]: "?"
+        - text: =
+        - generic [ref=e49]:
+          - text: "\""
+          - textbox "hostname" [ref=e50]: laptop
+          - text: "\""
+      - generic [ref=e51]:
+        - generic [ref=e52]:
+          - text: dir
+          - 'note "the folder the terminal shows your code running in; {} is the file name" [ref=e53]': "?"
+        - text: =
+        - generic [ref=e54]:
+          - text: "\""
+          - textbox "dir" [ref=e55]: lab
+          - text: "\""
+      - generic [ref=e56]:
+        - generic [ref=e57]:
+          - text: title
+          - 'note "the big heading at the top of the document; empty uses the file name, {} is the file name" [ref=e58]': "?"
+        - text: =
+        - textbox "title" [ref=e60]:
+          - /placeholder: same as the upload
+      - button "[+] more options" [ref=e61] [cursor=pointer]
+    - button "add a file to start" [disabled] [ref=e63]
+    - link "made by kartinul" [ref=e64] [cursor=pointer]:
+      - /url: https://github.com/kartinul/savecodex

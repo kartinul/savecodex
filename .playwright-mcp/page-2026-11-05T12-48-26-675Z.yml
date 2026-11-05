@@ -1,0 +1,165 @@
+- generic [ref=e3]:
+  - main [ref=e4]:
+    - button "$_ savecodex" [ref=e5] [cursor=pointer]
+    - region "Document preview" [ref=e67]:
+      - paragraph [ref=e68]: "# how document_solved.docx will look"
+      - article [ref=e69]:
+        - generic [ref=e70]:
+          - heading "document" [level=1] [ref=e71]
+          - heading "1" [level=2] [ref=e72]
+          - heading "(a)" [level=3] [ref=e73]
+          - generic [ref=e74]: "#include <stdio.h> int main() { int n, f = 1; printf(\"Enter a number: \"); scanf(\"%d\", &n); for (int i = 2; i <= n; i++) f *= i; printf(\"Factorial of %d is %d\\n\", n, f); }"
+          - paragraph [ref=e75]
+          - paragraph [ref=e76]
+          - heading "(b)" [level=3] [ref=e77]
+          - heading "(i)" [level=4] [ref=e78]
+          - paragraph [ref=e79]: An array keeps its elements next to each other in memory, so any element can be read straight from its index. Inserting in the middle means moving every element after it.
+          - paragraph [ref=e80]
+          - heading "(ii)" [level=4] [ref=e81]
+          - paragraph [ref=e82]: A linked list stores each element with a pointer to the next one, so inserting only changes two pointers, but reaching the n-th element means walking n steps.
+          - paragraph [ref=e83]
+          - heading "2" [level=2] [ref=e84]
+          - heading "(a)" [level=3] [ref=e85]
+          - generic [ref=e86]: "def fib(n): a, b = 0, 1 for _ in range(n): a, b = b, a + b return a print(fib(10))"
+          - paragraph [ref=e87]
+          - paragraph [ref=e88]
+          - heading "(b)" [level=3] [ref=e89]
+          - paragraph [ref=e90]:
+            - img "Sample ER diagram" [ref=e91]:
+              - generic [ref=e93]: Student
+              - generic [ref=e95]: enrolls
+              - generic [ref=e97]: Course
+              - generic [ref=e99]: M
+              - generic [ref=e100]: "N"
+              - generic [ref=e102]: roll
+              - generic [ref=e104]: name
+              - generic [ref=e106]: code
+              - generic [ref=e108]: title
+  - complementary "Panel" [ref=e19]:
+    - generic [ref=e20]:
+      - group "Mode" [ref=e21]:
+        - button "solve" [pressed] [ref=e22] [cursor=pointer]
+        - button "pack" [ref=e23] [cursor=pointer]
+      - button "Hide panel" [ref=e24] [cursor=pointer]: »
+    - generic [ref=e109]:
+      - generic [ref=e110]:
+        - heading "settings" [level=1] [ref=e111]
+        - generic [ref=e112]:
+          - button "Reset all settings and delete saved themes" [ref=e113] [cursor=pointer]
+          - button "back" [ref=e116] [cursor=pointer]
+      - heading "# terminal" [level=2] [ref=e117]
+      - generic [ref=e118]:
+        - generic [ref=e119]:
+          - generic [ref=e120]:
+            - text: window
+            - note "which computer the terminal screenshots look like they came from" [ref=e121]: "?"
+          - generic [ref=e122]:
+            - button "windows" [pressed] [ref=e123] [cursor=pointer]
+            - button "mac" [ref=e124] [cursor=pointer]
+            - button "ubuntu" [ref=e125] [cursor=pointer]
+        - generic [ref=e126]:
+          - generic [ref=e127]:
+            - text: colors
+            - note "dark or light terminal in the screenshots" [ref=e128]: "?"
+          - generic [ref=e129]:
+            - button "dark" [pressed] [ref=e130] [cursor=pointer]
+            - button "light" [ref=e131] [cursor=pointer]
+        - generic [ref=e132]:
+          - generic [ref=e133]:
+            - text: username
+            - note "your name in the terminal line, like user@laptop" [ref=e134]: "?"
+          - textbox "usernameyour name in the terminal line, like user@laptop" [ref=e135]: user
+        - generic [ref=e136]:
+          - generic [ref=e137]:
+            - text: hostname
+            - note "the computer name after the @ in the terminal line" [ref=e138]: "?"
+          - textbox "hostnamethe computer name after the @ in the terminal line" [ref=e139]: laptop
+        - generic [ref=e140]:
+          - generic [ref=e141]:
+            - text: dir
+            - 'note "the folder the terminal shows your code running in; {} is the file name" [ref=e142]': "?"
+          - 'textbox "dirthe folder the terminal shows your code running in; {} is the file name" [ref=e143]': lab
+        - generic [ref=e144]:
+          - generic [ref=e145]:
+            - text: messy
+            - 'note "makes screenshots look taken by hand: uneven crop, a scrollbar, an unfocused window; the dice shows another sample" [ref=e146]': "?"
+          - generic [ref=e147]:
+            - slider "messy" [ref=e148]: "0"
+            - generic [ref=e149]: "0"
+            - button "another sample" [disabled] [ref=e150]: ⚄
+        - generic [ref=e151]:
+          - generic [ref=e152]:
+            - text: min width
+            - note "how wide the terminal window is at least, in characters" [ref=e153]: "?"
+          - spinbutton "min widthhow wide the terminal window is at least, in characters" [ref=e154]: "80"
+      - heading "# document" [level=2] [ref=e155]
+      - generic [ref=e156]:
+        - generic [ref=e157]:
+          - generic [ref=e158]:
+            - text: theme
+            - 'note "how the word file looks: fonts, headings, code boxes; edit makes your own" [ref=e159]': "?"
+          - generic [ref=e160]:
+            - button "theme" [ref=e162] [cursor=pointer]: current ▾
+            - button "edit" [ref=e163] [cursor=pointer]
+        - generic [ref=e164]:
+          - generic [ref=e165]:
+            - text: title
+            - 'note "the big heading at the top of the document; empty uses the file name, {} is the file name" [ref=e166]': "?"
+          - 'textbox "titlethe big heading at the top of the document; empty uses the file name, {} is the file name" [ref=e167]':
+            - /placeholder: same as the upload
+        - generic [ref=e168]:
+          - generic [ref=e169]:
+            - text: text under the title
+            - 'note "written under the title, like your name or a short note; {} is the file name" [ref=e170]': "?"
+          - 'textbox "text under the titlewritten under the title, like your name or a short note; {} is the file name" [ref=e171]':
+            - /placeholder: your name, a date, anything else
+        - generic [ref=e172]:
+          - generic [ref=e173]:
+            - text: file name
+            - 'note "the name of the word file you download; {} is the uploaded file name" [ref=e174]': "?"
+          - 'textbox "file namethe name of the word file you download; {} is the uploaded file name" [ref=e175]':
+            - /placeholder: "{}_solved"
+        - generic [ref=e176]:
+          - generic [ref=e177]:
+            - text: new page per question
+            - note "start each answer on a new page" [ref=e178]: "?"
+          - checkbox "new page per questionstart each answer on a new page" [ref=e179] [cursor=pointer]
+        - generic [ref=e180]:
+          - generic [ref=e181]:
+            - text: numbering
+            - note "how sub-parts are numbered in their headings" [ref=e182]: "?"
+          - button "numbering" [ref=e184] [cursor=pointer]: 1(b)(i) ▾
+        - generic [ref=e185]:
+          - generic [ref=e186]:
+            - text: parts
+            - note "short heads a sub-part with only its own number, under its question's heading; full repeats the whole label" [ref=e187]: "?"
+          - generic [ref=e188]:
+            - button "(i)" [pressed] [ref=e189] [cursor=pointer]
+            - button "1(b)(i)" [ref=e190] [cursor=pointer]
+      - heading "# answers" [level=2] [ref=e191]
+      - generic [ref=e192]:
+        - generic [ref=e193]:
+          - generic [ref=e194]:
+            - text: level
+            - 'note "how professional the code looks: 1 is a careless student (bad names, messy indents), 5 is clean code" [ref=e195]': "?"
+          - generic [ref=e196]:
+            - button "1" [ref=e197] [cursor=pointer]
+            - button "2" [ref=e198] [cursor=pointer]
+            - button "3" [pressed] [ref=e199] [cursor=pointer]
+            - button "4" [ref=e200] [cursor=pointer]
+            - button "5" [ref=e201] [cursor=pointer]
+        - generic [ref=e202]:
+          - generic [ref=e203]:
+            - text: ai instructions
+            - note "your own rules the ai follows before anything else, like \"use java\" or \"comment every line\"" [ref=e204]: "?"
+          - textbox "ai instructionsyour own rules the ai follows before anything else, like \"use java\" or \"comment every line\"" [ref=e205]:
+            - /placeholder: use java, keep answers short, comment the code…
+        - generic [ref=e206]:
+          - generic [ref=e207]:
+            - text: double-check answers
+            - note "the ai grades every answer and redoes the wrong ones; takes longer" [ref=e208]: "?"
+          - checkbox "double-check answersthe ai grades every answer and redoes the wrong ones; takes longer" [ref=e209] [cursor=pointer]
+      - group [ref=e210]:
+        - generic "# own api key [+]" [ref=e211] [cursor=pointer]
+    - link "made by kartinul" [ref=e64] [cursor=pointer]:
+      - /url: https://github.com/kartinul/savecodex
