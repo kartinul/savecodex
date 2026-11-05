@@ -13,8 +13,11 @@ pub struct Look {
     pub italic: bool,
     pub underline: bool,
     pub center: bool,
-    /// A line under the paragraph.
+    /// A line under the paragraph, in `rule_color` or else the text's colour.
     pub rule: bool,
+    pub rule_color: String,
+    /// Kerning from 14pt, as Word's Title has it.
+    pub kern: bool,
     /// Space above, in points.
     pub before: f32,
     /// Space below in points; None keeps the text's.
@@ -151,7 +154,9 @@ impl DocTheme {
         font(&mut self.prefix);
         for look in std::iter::once(&mut self.title).chain(&mut self.headings).chain(std::iter::once(&mut self.question)) {
             font(&mut look.font);
-            if look.color.len() != 6 || !look.color.chars().all(|c| c.is_ascii_hexdigit()) { look.color.clear() }
+            for color in [&mut look.color, &mut look.rule_color] {
+                if color.len() != 6 || !color.chars().all(|c| c.is_ascii_hexdigit()) { color.clear() }
+            }
             look.size = if look.size == 0.0 { 0.0 } else { look.size.clamp(6.0, 72.0) };
             look.before = look.before.clamp(0.0, 72.0);
             look.after = look.after.map(|a| a.clamp(0.0, 72.0));

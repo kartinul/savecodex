@@ -23,6 +23,17 @@
     "code_size": 11
   },
   {
+    "name": "word 2010",
+    "margin": 2.54, "margin_top": 2.54, "font": "Calibri", "size": 11, "line": 1.15, "gap": 10,
+    "title": { "font": "Cambria", "size": 26, "center": false, "color": "17365D", "spacing": 0.25, "kern": true, "after": 15, "line": 1, "rule": true, "rule_color": "4F81BD" },
+    "headings": [
+      { "font": "Cambria", "size": 14, "bold": true, "color": "365F91", "before": 24, "after": 0 },
+      { "font": "Cambria", "size": 13, "bold": true, "color": "4F81BD", "before": 10, "after": 0 },
+      { "font": "Cambria", "size": 11, "bold": true, "color": "4F81BD", "before": 10, "after": 0 }
+    ],
+    "code_size": 11
+  },
+  {
     "name": "academic",
     "margin": 2.54, "margin_top": 2.54, "font": "Times New Roman", "size": 12, "line": 1.5, "gap": 6,
     "title": { "size": 16, "bold": true, "center": true },

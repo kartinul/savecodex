@@ -64,7 +64,8 @@ fn styled(id: &str, name: &str, look: &Look) -> Style {
     if look.underline { style = style.underline("single") }
     if look.center { style = style.align(AlignmentType::Center) }
     if look.rule {
-        let rule = ParagraphBorder::new(ParagraphBorderPosition::Bottom).val(BorderType::Single).size(6).space(1).color(if look.color.is_empty() { "auto" } else { &look.color });
+        let color = [&look.rule_color, &look.color].into_iter().find(|c| !c.is_empty()).map_or("auto", |c| c.as_str());
+        let rule = ParagraphBorder::new(ParagraphBorderPosition::Bottom).val(BorderType::Single).size(8).space(4).color(color);
         style.paragraph_property = style.paragraph_property.set_borders(ParagraphBorders::with_empty().set(rule));
     }
     style
@@ -97,15 +98,19 @@ fn with_styles(docx: Docx, theme: &DocTheme) -> Docx {
     docx.add_style(code).add_style(styled("Question", "Question", &theme.question))
 }
 
-/// docx-rs can't write kerning, ligatures or contextual spacing, so they go in by hand where Word 365
-/// has them: kern from 1pt and standard ligatures on all text, and a Title that ignores its own spacing.
-fn kerned(styles: &[u8]) -> Vec<u8> {
+/// docx-rs can't write kerning, ligatures or contextual spacing, so they go in by hand where Word has
+/// them: kern from 1pt and standard ligatures on all text (365), kern from 14pt on the Title, and a
+/// Title that ignores its own spacing.
+fn kerned(styles: &[u8], theme: &DocTheme) -> Vec<u8> {
     let mut xml = String::from_utf8_lossy(styles).into_owned();
     let insert = |xml: &mut String, from: &str, before: &str, text: &str| {
         if let Some(at) = xml.find(from).and_then(|s| xml[s..].find(before).map(|i| s + i)) { xml.insert_str(at, text) }
     };
-    insert(&mut xml, "<w:rPrDefault>", "<w:sz ", r#"<w:kern w:val="2" />"#);
-    insert(&mut xml, "<w:rPrDefault>", "</w:rPr>", r#"<w14:ligatures w14:val="standardContextual" />"#);
+    if theme.kern {
+        insert(&mut xml, "<w:rPrDefault>", "<w:sz ", r#"<w:kern w:val="2" />"#);
+        insert(&mut xml, "<w:rPrDefault>", "</w:rPr>", r#"<w14:ligatures w14:val="standardContextual" />"#);
+    }
+    if theme.title.kern { insert(&mut xml, r#"w:styleId="Title""#, "<w:sz ", r#"<w:kern w:val="28" />"#) }
     insert(&mut xml, r#"w:styleId="Title""#, "</w:pPr>", "<w:contextualSpacing />");
     xml.into_bytes()
 }
@@ -225,7 +230,7 @@ pub fn generate_docx(
     let docx_file = std::fs::File::create(output).context("Failed to create DOCX")?;
     tracing::debug!("Packing DOCX file...");
     let mut xml = docx.build();
-    if theme.kern { xml.styles = kerned(&xml.styles) }
+    xml.styles = kerned(&xml.styles, theme);
     xml.settings = word_settings(&xml.settings);
     xml.pack(docx_file).context("Failed to pack DOCX")?;
     tracing::debug!("Successfully packed DOCX file");

@@ -48,6 +48,9 @@ def props(rpr, ppr, theme):
         if s:
             for k in ["before", "after", "line", "lineRule"]:
                 if attr(s, k) is not None: out[k] = attr(s, k)
+        b = re.search(r"<w:pBdr>.*?<w:bottom\b[^>]*>", ppr, re.S)
+        if b:
+            for k in ["val", "sz", "space", "color"]: out["border." + k] = attr(b.group(0).split("<w:bottom")[1], k)
         for k in ["keepNext", "keepLines", "contextualSpacing"]:
             if tag(ppr, k): out[k] = "on"
         for k in ["outlineLvl", "jc"]:
@@ -74,7 +77,7 @@ def resolve(path, stock_normal=False, theme_override=None, override_defaults=Non
         theme.update(zip(["major", "minor", "heading"], theme_override.split(",")))
     defaults = re.search(r"<w:docDefaults>(.*?)</w:docDefaults>", x, re.S).group(1)
     base = props(section(defaults, "rPrDefault"), section(defaults, "pPrDefault"), theme)
-    if override_defaults: base.update(zip(["sz", "line"], override_defaults.split(",")))
+    if override_defaults: base.update(zip(["sz", "line", "font"], override_defaults.split(",")))
     styles = {}
     for m in re.finditer(r'<w:style [^>]*w:type="paragraph"[^>]*w:styleId="([^"]*)"[^>]*>(.*?)</w:style>', x, re.S):
         sid, body = m.groups()

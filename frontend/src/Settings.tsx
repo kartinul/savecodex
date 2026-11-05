@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { NUMBERINGS, partLabel, type Mode, type Numbering, type Settings } from "./api";
 
 export const TIP = {
@@ -72,6 +73,31 @@ function Text({ label, tip, value, ph, onChange, stack, masked }: { label: strin
   );
 }
 
+/** A dropdown in the panel's own style; options are values, or [value, label] pairs. */
+export function Drop({ label, value, options, onChange }: { label: string; value: string; options: (string | [string, string])[]; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const pairs = options.map(o => typeof o === "string" ? [o, o] : o);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (e: Event) => { if (!box.current?.contains(e.target as Node)) setOpen(false) };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) };
+    addEventListener("pointerdown", outside);
+    addEventListener("keydown", escape);
+    return () => { removeEventListener("pointerdown", outside); removeEventListener("keydown", escape) };
+  }, [open]);
+  return (
+    <div className="drop" ref={box}>
+      <button className="drop-btn" aria-haspopup="listbox" aria-expanded={open} aria-label={label} onClick={() => setOpen(!open)}>
+        {pairs.find(([v]) => v === value)?.[1] ?? value} <span aria-hidden>▾</span>
+      </button>
+      {open && <ul className="drop-list" role="listbox" aria-label={label}>
+        {pairs.map(([v, l]) => <li key={v}><button role="option" aria-selected={v === value} onClick={() => { onChange(v); setOpen(false) }}>{l}</button></li>)}
+      </ul>}
+    </div>
+  );
+}
+
 export function Switch({ label, tip, checked, onChange }: { label: string; tip?: string; checked: boolean; onChange: (v: boolean) => void }) {
   return <label className="row"><span>{label}{tip && <Tip t={tip} />}</span><input type="checkbox" className="sw" checked={checked} onChange={e => onChange(e.target.checked)} /></label>;
 }
@@ -80,6 +106,7 @@ export function SettingsView({ mode, s, set, themes, onEditTheme, apiKey, setApi
   return (
     <div className="cfg">
       <header className="cfg-head"><h1 className="title">settings</h1><button className="btn small" onClick={onBack}>back</button></header>
+      <h2 className="sec">terminal</h2>
       <div className="rows">
         <div className="row"><span>window<Tip t={TIP.window} /></span><Seg value={s.style} options={[["windows", "windows"], ["macos", "mac"], ["ubuntu", "ubuntu"]]} onChange={style => set({ style })} /></div>
         <div className="row"><span>colors<Tip t={TIP.colors} /></span><Seg value={s.theme} options={[["dark", "dark"], ["light", "light"]]} onChange={theme => set({ theme })} /></div>
@@ -99,22 +126,22 @@ export function SettingsView({ mode, s, set, themes, onEditTheme, apiKey, setApi
       </div>
       <h2 className="sec">document</h2>
       <div className="rows">
+        <div className="row"><span>theme<Tip t={TIP.doc} /></span>
+          <span className="pick">
+            <Drop label="theme" value={s.doc_theme} options={themes} onChange={doc_theme => set({ doc_theme })} />
+            <button className="btn small" onClick={onEditTheme}>edit</button>
+          </span>
+        </div>
         <Text label="title" tip={TIP.title} value={s.doc_title} ph="same as the upload" onChange={doc_title => set({ doc_title })} />
         <label className="row stack"><span>text under the title<Tip t={TIP.text} /></span>
           <textarea className="ri" rows={2} value={s.doc_text} placeholder="your name, a date, anything else" onChange={e => set({ doc_text: e.target.value })} />
         </label>
         <Text label="file name" tip={TIP.file} value={s.output} ph={mode === "solve" ? "{}_solved" : "{}_pack"} onChange={output => set({ output })} />
         <Switch label={mode === "solve" ? "new page per question" : "new page per file"} tip={TIP.pages} checked={s.page_break} onChange={page_break => set({ page_break })} />
-        <div className="row"><span>theme<Tip t={TIP.doc} /></span>
-          <span className="pick">
-            <select className="ri" value={s.doc_theme} aria-label="theme" onChange={e => set({ doc_theme: e.target.value })}>{themes.map(n => <option key={n}>{n}</option>)}</select>
-            <button className="btn small" onClick={onEditTheme}>edit</button>
-          </span>
-        </div>
         {mode === "solve" && <>
-          <label className="row"><span>numbering<Tip t={TIP.numbering} /></span>
-            <select className="ri" value={s.numbering} onChange={e => set({ numbering: e.target.value as Numbering })}>{NUMBERINGS.map(n => <option key={n}>{n}</option>)}</select>
-          </label>
+          <div className="row"><span>numbering<Tip t={TIP.numbering} /></span>
+            <Drop label="numbering" value={s.numbering} options={NUMBERINGS} onChange={n => set({ numbering: n as Numbering })} />
+          </div>
           <div className="row"><span>parts<Tip t={TIP.labels} /></span>
             <Seg value={s.full_labels ? "full" : "short"} options={[["short", partLabel(s.numbering, false, "1", [2, 1])], ["full", partLabel(s.numbering, true, "1", [2, 1])]]} onChange={v => set({ full_labels: v === "full" })} />
           </div>

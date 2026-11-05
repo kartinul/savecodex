@@ -131,8 +131,14 @@ details[open] > summary::after { content: "  [-]" }
 .dice:disabled { color: var(--line); cursor: default }
 .num { width: 6ch; flex: none }
 .pick { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex: 1 }
-select.ri { appearance: none; cursor: pointer; text-align-last: right }
-select.ri:hover { text-decoration: underline dashed }
+.drop { position: relative; min-width: 0 }
+.drop-btn { border: 0; background: none; padding: 4px 0; color: var(--accent); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis }
+.drop-btn span { color: var(--muted) }
+.drop-btn:hover { text-decoration: underline dashed }
+.drop-list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 10; min-width: 100%; max-height: 260px; overflow: auto; list-style: none; margin: 0; padding: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: 0 4px 14px rgb(0 0 0 / .12); animation: fade .12s }
+.drop-list button { display: block; width: 100%; padding: 6px 10px; border: 0; background: none; border-radius: var(--r-sm); text-align: left; white-space: nowrap; color: var(--fg) }
+.drop-list button:hover, .drop-list button:focus-visible { background: var(--soft) }
+.drop-list button[aria-selected="true"] { background: var(--accent); color: var(--on-accent); font-weight: 700 }
 .swatch { width: 28px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: var(--r-sm); background: none; cursor: pointer }
 
 /* main area */

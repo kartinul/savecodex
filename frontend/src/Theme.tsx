@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { CODE_FONTS, FONTS, type DocTheme, type Look } from "./api";
-import { Seg, Switch } from "./Settings";
+import { Drop, Seg, Switch } from "./Settings";
 
 type Change = (patch: Partial<DocTheme>) => void;
 
@@ -14,12 +14,9 @@ function Num({ label, value, step = 1, max = 72, onChange }: { label: string; va
 
 function Font({ label, value, fonts, onChange }: { label: string; value: string; fonts: string[]; onChange: (v: string) => void }) {
   return (
-    <label className="row"><span>{label}</span>
-      <select className="ri" value={value} onChange={e => onChange(e.target.value)}>
-        <option value="">same as text</option>
-        {fonts.map(f => <option key={f}>{f}</option>)}
-      </select>
-    </label>
+    <div className="row"><span>{label}</span>
+      <Drop label={label} value={value} options={[["", "same as text"], ...fonts]} onChange={onChange} />
+    </div>
   );
 }
 
@@ -84,9 +81,7 @@ export function ThemeView({ theme, names, custom, setCustom, select, onBack }: {
     <div className="cfg">
       <header className="cfg-head"><h1 className="title">doc theme</h1><button className="btn small" onClick={onBack}>back</button></header>
       <div className="rows">
-        <label className="row"><span>theme</span>
-          <select className="ri" value={theme.name} onChange={e => select(e.target.value)}>{names.map(n => <option key={n}>{n}</option>)}</select>
-        </label>
+        <div className="row"><span>theme</span><Drop label="theme" value={theme.name} options={names} onChange={select} /></div>
         {own
           ? <label className="row"><span>name</span>
               <input key={theme.name} className="ri" defaultValue={theme.name} spellCheck={false}
@@ -107,9 +102,7 @@ export function ThemeView({ theme, names, custom, setCustom, select, onBack }: {
         <Switch label="page numbers" checked={theme.page_numbers} onChange={page_numbers => change({ page_numbers })} />
       </Group>
       <Group title="text">
-        <label className="row"><span>font</span>
-          <select className="ri" value={theme.font} onChange={e => change({ font: e.target.value })}>{FONTS.map(f => <option key={f}>{f}</option>)}</select>
-        </label>
+        <div className="row"><span>font</span><Drop label="font" value={theme.font} options={FONTS} onChange={font => change({ font })} /></div>
         <Num label="size" value={theme.size} onChange={size => change({ size })} />
         <Num label="line spacing" step={0.05} max={3} value={theme.line} onChange={line => change({ line })} />
         <Num label="space after (pt)" value={theme.gap} onChange={gap => change({ gap })} />
