@@ -176,6 +176,7 @@ Read from the shell or the first `.env` in the current directory or a parent. CL
 |---|---|---|
 | `SMART_PROVIDER` | auto detect | `-p`. `gemini`, `openai`, `ollama`, `claude`, `codex`, `gemini-cli`, `cursor`, `opencode`, `copilot`, `qwen`, `amp`, `antigravity` |
 | `MID_PROVIDER` / `FAST_PROVIDER` | tier above | |
+| `PROVIDER`, `MODEL`, `THINKING`, `API_KEY`, `BASE_URL` | none | Shorthand for every tier without its own `{TIER}_` key |
 | `{TIER}_MODEL` | see below | Comma separated Gemini models fall back in order |
 | `{TIER}_THINKING` | provider default | `off`, `low`, `medium`, `high`, `xhigh` (Gemini, OpenAI/Ollama, claude, codex) |
 | `{TIER}_API_KEY`, `{TIER}_BASE_URL` | none | Needed for `openai` |

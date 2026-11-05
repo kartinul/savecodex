@@ -214,20 +214,22 @@ pub fn resolve(tier: Tier) -> Result<Vec<AiConfig>> {
 }
 
 fn resolve_with(tier: Tier, var: &dyn Fn(&str) -> Option<String>, find_bin: &dyn Fn(&str) -> Option<PathBuf>) -> Result<Vec<AiConfig>> {
-    let get = |from: Tier, key: &str| var(&format!("{}_{key}", from.name()));
-    let thinking = tier.chain().iter().find_map(|t| get(*t, "THINKING"));
-    if let Some(depth) = tier.chain().iter().position(|t| get(*t, "PROVIDER").is_some()) {
-        let from = tier.chain()[depth];
+    // bare PROVIDER, MODEL, ... hold for every tier without its own
+    let prefixes: Vec<String> = tier.chain().iter().map(|t| format!("{}_", t.name())).chain([String::new()]).collect();
+    let get = |from: &str, key: &str| var(&format!("{from}{key}"));
+    let thinking = prefixes.iter().find_map(|t| get(t, "THINKING"));
+    if let Some(depth) = prefixes.iter().position(|t| get(t, "PROVIDER").is_some()) {
+        let from = prefixes[depth].as_str();
         let name = get(from, "PROVIDER").unwrap();
         // the tier's own model wins, even when the provider comes from a tier above
-        let model = tier.chain()[..=depth].iter().find_map(|t| get(*t, "MODEL"));
+        let model = prefixes[..=depth].iter().find_map(|t| get(t, "MODEL"));
         let (provider, default_model) = match name.as_str() {
             "gemini" => (Provider::Gemini, GEMINI_MODELS[tier as usize]),
             "openai" => (Provider::OpenAi, ""),
             "ollama" => (Provider::Ollama, ""),
             _ => {
                 let agent = AGENTS.iter().find(|a| a.name == name).with_context(|| format!(
-                    "unknown {}_PROVIDER '{name}' (use gemini, openai, ollama, {})", from.name(),
+                    "unknown {from}PROVIDER '{name}' (use gemini, openai, ollama, {})",
                     AGENTS.iter().map(|a| a.name).collect::<Vec<_>>().join(", ")))?;
                 let bin = find_bin(agent.bin).with_context(|| format!("{} not found on PATH", agent.bin))?;
                 (Provider::Agent(agent, bin), agent.models[tier as usize])
@@ -235,17 +237,17 @@ fn resolve_with(tier: Tier, var: &dyn Fn(&str) -> Option<String>, find_bin: &dyn
         };
         let api_key = match provider {
             Provider::Gemini => get(from, "API_KEY").or_else(|| var("GEMINI_API_KEY"))
-                .with_context(|| format!("{}_API_KEY or GEMINI_API_KEY must be set for gemini", from.name()))?,
-            Provider::OpenAi => get(from, "API_KEY").with_context(|| format!("{}_API_KEY must be set for openai", from.name()))?,
+                .with_context(|| format!("{from}API_KEY or GEMINI_API_KEY must be set for gemini"))?,
+            Provider::OpenAi => get(from, "API_KEY").with_context(|| format!("{from}API_KEY must be set for openai"))?,
             Provider::Ollama | Provider::Agent(..) => String::new(),
         };
         let base_url = match provider {
-            Provider::OpenAi => Some(get(from, "BASE_URL").with_context(|| format!("{}_BASE_URL must be set for openai", from.name()))?),
+            Provider::OpenAi => Some(get(from, "BASE_URL").with_context(|| format!("{from}BASE_URL must be set for openai"))?),
             Provider::Ollama => Some(get(from, "BASE_URL").or_else(|| var("OLLAMA_HOST")).unwrap_or_else(|| "http://localhost:11434".into())),
             _ => None,
         };
         if matches!(provider, Provider::OpenAi) && model.is_none() {
-            bail!("{}_MODEL must be set for openai", from.name());
+            bail!("{from}MODEL must be set for openai");
         }
         let model = model.unwrap_or_else(|| default_model.into());
         return Ok(vec![AiConfig { provider, model, base_url, api_key, thinking, tier, auto: false }]);
