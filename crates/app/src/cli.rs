@@ -122,6 +122,19 @@ struct DocArgs {
     #[arg(long)]
     page_break: bool,
 
+    /// How the document looks: a preset (current, classic, academic, modern, lab record, compact,
+    /// typewriter, elegant) or a theme .json file. Fields a file leaves out keep the current look.
+    #[arg(long, default_value = "current", env = "SAVECODEX_DOC_THEME")]
+    doc_theme: String,
+
+    /// How sub-parts are numbered: 1(b)(i), 1(2)(1), 1.b.i or 1.2.1. Defaults to the theme's.
+    #[arg(long, env = "SAVECODEX_NUMBERING")]
+    numbering: Option<String>,
+
+    /// Head sub-parts with their whole label (1(b)(i)) instead of only their own part ((i)).
+    #[arg(long, env = "SAVECODEX_FULL_LABELS")]
+    full_labels: bool,
+
     /// When to ask the AI for stdin: auto (only files that read stdin), always, or never.
     #[arg(long, value_enum, default_value_t, env = "SAVECODEX_AI_INPUT")]
     ai_input: crate::pack::AiInput,
@@ -136,6 +149,18 @@ struct DocArgs {
 
     #[command(flatten)]
     linux: LinuxArgs,
+}
+
+impl DocArgs {
+    fn theme(&self) -> anyhow::Result<crate::doc_theme::DocTheme> {
+        let mut theme = crate::doc_theme::DocTheme::load(&self.doc_theme)?;
+        if let Some(n) = &self.numbering {
+            anyhow::ensure!(["1(b)(i)", "1(2)(1)", "1.b.i", "1.2.1"].contains(&n.as_str()), "--numbering must be 1(b)(i), 1(2)(1), 1.b.i or 1.2.1");
+            theme.numbering = n.clone();
+        }
+        theme.full_labels |= self.full_labels;
+        Ok(theme)
+    }
 }
 
 /// Ctrl-C or a kill, so a stopped solve can clean up after itself.
@@ -414,7 +439,7 @@ pub async fn run() -> Result<()> {
                     println!("   ℹ️  Text: {}", text.replace('\n', "\\n"));
                 }
 
-                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), doc.page_break, &opts, doc.jobs, recursive, doc.ai_input, !doc.no_trim, None).await?;
+                crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), doc.page_break, &doc.theme()?, &opts, doc.jobs, recursive, doc.ai_input, !doc.no_trim, None).await?;
             }
         }
         Commands::Solve { inputs, questions, max_pages, check, instructions, doc, shot, ai } => {
@@ -436,6 +461,7 @@ pub async fn run() -> Result<()> {
                 anyhow::bail!("When solving multiple documents, the --output flag must contain the '{{}}' placeholder to avoid overwriting files.");
             }
 
+            let theme = doc.theme()?;
             let multi = runs.len() > 1;
             let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(doc.jobs.max(1)));
             let mut set = tokio::task::JoinSet::new();
@@ -448,6 +474,7 @@ pub async fn run() -> Result<()> {
                     doc_title: doc.doc_title.as_ref().map(|t| t.replace("{}", &name)),
                     doc_text: doc.doc_text.as_ref().map(|t| t.replace("{}", &name)),
                     page_break: doc.page_break,
+                    theme: theme.clone(),
                     trim: !doc.no_trim,
                     jobs: doc.jobs,
                     questions,

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { DEFAULTS, clearJob, docUrl, followJob, previewUrl, startJob, type JobEvent, type Mode, type Settings, type Upload } from "./api";
+import { DEFAULTS, clearJob, docUrl, fetchThemes, followJob, previewUrl, startJob, type DocTheme, type JobEvent, type Mode, type Settings, type Upload } from "./api";
 import { DocPreview, Groups, Idle, type Doc } from "./Live";
 import { SettingsView, Toml } from "./Settings";
+import { ThemeView } from "./Theme";
 
 type Phase = "idle" | "running" | "done";
 
@@ -60,6 +61,10 @@ export default function App() {
   const [uploads, setUploads] = useState<Record<Mode, Upload[]>>({ solve: [], pack: [] });
   const [phase, setPhase] = useState<Phase>("idle");
   const [cfg, setCfg] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [presets, setPresets] = useState<DocTheme[]>([]);
+  const [custom, setCustom] = useStored<Record<string, DocTheme>>("savecodex.themes", {});
+  useEffect(() => { fetchThemes().then(setPresets).catch(() => {}) }, []);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [job, setJob] = useState("");
   const [toast, setToast] = useState("");
@@ -76,6 +81,9 @@ export default function App() {
   const mode = view.mode, files = uploads[mode];
   const set = (patch: Partial<Settings>) => setSettings({ ...settings, ...patch });
   const preview = useDebounced(previewUrl(settings), 200);
+  const themes = [...presets, ...Object.values(custom)];
+  const theme = themes.find(t => t.name === settings.doc_theme) ?? presets[0];
+  const names = themes.map(t => t.name);
 
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(""), 3000); return () => clearTimeout(t) } }, [toast]);
 
@@ -102,10 +110,11 @@ export default function App() {
     stopFollowing.current();
     if (job) clearJob(job);
     setCfg(false);
+    setEditing(false);
     setDocs([]);
     setPhase("running");
     try {
-      const id = await startJob(mode, files, settings, apiKey);
+      const id = await startJob(mode, files, settings, theme, apiKey);
       setJob(id);
       stopFollowing.current = followJob(id, e => {
         setDocs(d => reduce(d, e, mode));
@@ -157,7 +166,7 @@ export default function App() {
       <main className="main">
         <div className="title brand">savecodex</div>
         {phase === "idle"
-          ? cfg ? <DocPreview mode={mode} s={settings} name={name} preview={preview} /> : <Idle mode={mode} preview={preview} />
+          ? cfg && theme ? <DocPreview mode={mode} s={settings} t={theme} name={name} preview={preview} /> : <Idle mode={mode} preview={preview} />
           : <Groups docs={docs} job={job} mode={mode} onDownload={d => download([d])} />}
       </main>
 
@@ -170,8 +179,10 @@ export default function App() {
           <button className="fold" aria-label={view.closed ? "Show panel" : "Hide panel"} onClick={() => setView({ ...view, closed: !view.closed })}>{view.closed ? "«" : "»"}</button>
         </div>
 
-        {cfg && phase === "idle" ? (
-          <SettingsView mode={mode} s={settings} set={set} apiKey={apiKey} setApiKey={setApiKey} onBack={() => setCfg(false)} />
+        {cfg && phase === "idle" ? editing && theme ? (
+          <ThemeView theme={theme} names={names} custom={custom} setCustom={setCustom} select={doc_theme => set({ doc_theme })} onBack={() => setEditing(false)} />
+        ) : (
+          <SettingsView mode={mode} s={settings} set={set} themes={names} onEditTheme={() => setEditing(true)} apiKey={apiKey} setApiKey={setApiKey} onBack={() => setCfg(false)} />
         ) : <>
           <h1 className="title">{mode === "solve" ? "solve a document" : "pack your code"}</h1>
           {phase === "idle" && <>
@@ -197,7 +208,7 @@ export default function App() {
                 ))}
               </ul>
             )}
-            <Toml s={settings} set={set} onMore={() => setCfg(true)} />
+            <Toml s={settings} set={set} themes={names} onMore={() => setCfg(true)} />
           </>}
           <div className="action" aria-live="polite">
             {phase === "idle" && <button className="btn primary" disabled={!files.length} onClick={run}>{files.length ? `${mode} ${noun(files.length)}` : "add a file to start"}</button>}

@@ -34,6 +34,7 @@ pub async fn run_pack(
     doc_title: Option<&str>,
     doc_text: Option<&str>,
     page_break: bool,
+    theme: &crate::doc_theme::DocTheme,
     opts: &crate::term_gen::TermGenOptions,
     jobs: usize,
     recursive: bool,
@@ -156,7 +157,7 @@ pub async fn run_pack(
 
     let out_docx = resolved_output.with_extension("docx");
     println!("All {} file(s) processed — writing {}…", total, out_docx.display());
-    crate::docx_gen::generate_docx(&out_docx, &resolved_title, doc_text, &pack_items, page_break)?;
+    crate::docx_gen::generate_docx(&out_docx, &resolved_title, doc_text, &pack_items, page_break, theme)?;
     info!("Wrote {}", out_docx.display());
     println!("Done → {}", out_docx.display());
 

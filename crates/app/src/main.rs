@@ -9,6 +9,7 @@ pub mod pack;
 pub mod ai;
 pub mod prompts;
 pub mod docx_gen;
+pub mod doc_theme;
 pub mod solve;
 pub mod linux;
 

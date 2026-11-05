@@ -32,6 +32,7 @@ pub fn api_router() -> Router {
         .route("/jobs/:id/shot/:n", get(shot))
         .route("/jobs/:id/doc/:n", get(doc))
         .route("/preview", get(preview))
+        .route("/themes", get(|| async { Json(crate::doc_theme::DocTheme::presets()) }))
         .layer(DefaultBodyLimit::max(64 << 20))
 }
 
@@ -178,6 +179,10 @@ fn stem(path: &Path) -> String {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("solved").to_string()
 }
 
+fn theme(f: &Fields) -> crate::doc_theme::DocTheme {
+    crate::doc_theme::DocTheme::from_web(field(f, "doc_theme").unwrap_or_default())
+}
+
 /// One document per PDF/DOCX, sharing the other files (images, data), like the CLI.
 async fn solve_job(job: &Arc<Job>, files: Vec<PathBuf>, f: &Fields) {
     let input = job.dir.path().join("in");
@@ -204,6 +209,7 @@ async fn solve_job(job: &Arc<Job>, files: Vec<PathBuf>, f: &Fields) {
             doc_title: field(f, "doc_title").map(|t| t.replace("{}", &name)),
             doc_text: field(f, "doc_text").map(|t| t.replace("{}", &name)),
             page_break: field(f, "page_break") == Some("true"),
+            theme: theme(f),
             trim: true,
             jobs: 15,
             questions: false,
@@ -235,7 +241,7 @@ async fn pack_job(job: &Arc<Job>, input: &Path, files: Vec<PathBuf>, f: &Fields)
     let title = field(f, "doc_title").map(|t| t.replace("{}", &name)).unwrap_or_else(|| name.clone());
     let text = field(f, "doc_text").map(|t| t.replace("{}", &name));
     let page_break = field(f, "page_break") == Some("true");
-    match crate::pack::run_pack(&folder, Some(&out), &[], Some(&title), text.as_deref(), page_break, &term, 15, true, crate::pack::AiInput::Auto, true, Some(ev.clone())).await {
+    match crate::pack::run_pack(&folder, Some(&out), &[], Some(&title), text.as_deref(), page_break, &theme(f), &term, 15, true, crate::pack::AiInput::Auto, true, Some(ev.clone())).await {
         Ok(Some(path)) => ev.done(path.file_name().unwrap_or_default().to_string_lossy().into_owned(), path),
         Ok(None) => ev.send(Event::Error { message: "no code files found".into() }),
         Err(e) => {

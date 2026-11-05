@@ -130,6 +130,10 @@ details[open] > summary::after { content: "  [-]" }
 .dice { border: 0; background: none; padding: 0 2px; color: var(--accent); font-size: var(--fs-l); line-height: 1 }
 .dice:disabled { color: var(--line); cursor: default }
 .num { width: 6ch; flex: none }
+.pick { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex: 1 }
+select.ri { appearance: none; cursor: pointer; text-align-last: right }
+select.ri:hover { text-decoration: underline dashed }
+.swatch { width: 28px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: var(--r-sm); background: none; cursor: pointer }
 
 /* main area */
 .idle { display: flex; flex-wrap: wrap; gap: 24px 40px; align-items: flex-start; padding: 16px; border: 1px dashed var(--line); border-radius: var(--r) }
@@ -147,11 +151,11 @@ img.shot.pop { animation: pop .4s cubic-bezier(.2, .9, .3, 1.2) }
 /* sizes follow the page width (cqw), so a bigger page reads like a bigger Word page */
 /* as big as fits without making the page scroll */
 .pages > .page { flex: 1 1 300px; max-width: min(640px, calc((100vh - 130px) / 1.414)); container-type: inline-size }
-.page { aspect-ratio: 1 / 1.414; overflow: hidden; background: #FFFFFF; color: #000000; box-shadow: 0 1px 3px rgb(31 52 69 / .25); font-family: Carlito, Calibri, "Helvetica Neue", Arial, sans-serif; animation: fade .3s }
+.page { position: relative; aspect-ratio: 1 / 1.414; overflow: hidden; background: #FFFFFF; color: #000000; box-shadow: 0 1px 3px rgb(31 52 69 / .25); font-family: Carlito, Calibri, "Helvetica Neue", Arial, sans-serif; animation: fade .3s }
 .sheet { height: 100%; padding: 9cqw 10cqw; display: flex; flex-direction: column; gap: 1.4cqw; font-size: 2.2cqw; line-height: 1.35 }
-.page h1 { font-size: 4.6cqw; font-weight: 400; text-align: center }
-.page h2 { font-size: 2.7cqw; font-weight: 700; margin-top: 1cqw }
+.page :is(h1, h2, h3, h4, p, pre) { margin: 0; font-size: inherit; font-weight: 400 }
 .page pre { font: inherit; white-space: pre-wrap }
+.page-num { position: absolute; left: 0; right: 0; text-align: center; font-size: 1.7cqw }
 .page img { width: 100%; height: auto; display: block }
 .page .gap { height: 1.4cqw }
 

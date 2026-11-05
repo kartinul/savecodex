@@ -80,6 +80,9 @@ struct Answer {
     /// The heading with every part kept, which names the answer's file.
     #[serde(skip)]
     slug: String,
+    /// The part positions shown as sub-headings in the document, empty when the heading has no parts.
+    #[serde(skip)]
+    parts: Vec<usize>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -94,6 +97,7 @@ pub struct SolveOptions {
     pub doc_title: Option<String>,
     pub doc_text: Option<String>,
     pub page_break: bool,
+    pub theme: crate::doc_theme::DocTheme,
     pub trim: bool,
     pub jobs: usize,
     pub questions: bool,
@@ -277,28 +281,19 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
 
     let mut items = Vec::new();
     let (mut done, mut failed, mut no_shot) = (0, Vec::new(), Vec::new());
-    let (mut last_label, mut last_question): (Option<String>, Option<String>) = (None, None);
-    for (mut item, status, label, question) in results {
+    for (item, status, label, _) in results {
         match status {
             Status::Done => done += 1,
             Status::NoScreenshot => no_shot.push(label),
             Status::Failed => failed.push(label),
             Status::Empty => { failed.push(label); continue }
         }
-        // a second answer to the same question continues under the first one's heading
-        if item.heading.is_some() && item.heading == last_label {
-            item.heading = Some(String::new());
-        } else {
-            last_label = item.heading.clone();
-        }
-        item.same_question = last_question.as_ref() == Some(&question);
-        last_question = Some(question);
         items.push(item);
     }
 
     let out = opts.output.clone().unwrap_or_else(|| PathBuf::from(format!("{stem}_solved"))).with_extension("docx");
     let title = opts.doc_title.clone().unwrap_or(stem);
-    crate::docx_gen::generate_docx(&out, &title, opts.doc_text.as_deref(), &items, opts.page_break)?;
+    crate::docx_gen::generate_docx(&out, &title, opts.doc_text.as_deref(), &items, opts.page_break, &opts.theme)?;
     if let Some(ev) = &opts.events {
         ev.done(out.file_name().map_or("solved.docx".into(), |n| n.to_string_lossy().into_owned()), out.clone());
     }
@@ -392,10 +387,11 @@ async fn solve_group(
         term.no_title_bar = *i > 0;
         let mut item = PackItem {
             // a corrected answer continues under the heading of the one it corrects
-            heading: Some(a.heading.replace(" (corrected)", "")),
+            heading: Some(question.map_or_else(|| a.heading.replace(" (corrected)", ""), |q| q.label.clone())),
+            parts: a.parts.clone(),
             content: a.code.clone(),
             answer: plain_text(&a.answer),
-            question: question.filter(|_| opts.questions && *i == 0).map(question_text).unwrap_or_default(),
+            question: question.filter(|_| (opts.questions || opts.theme.show_question) && *i == 0).map(question_text).unwrap_or_default(),
             ..Default::default()
         };
         let mut status = Status::Done;
@@ -573,6 +569,7 @@ fn prepare(s: &mut Solved, group: &Group, configs: &HashMap<String, LangConfig>)
             Some(q) => (heading(&q.label, &a.label, split), heading(&q.label, &a.label, own > 1)),
             None => (a.label.clone(), a.label.clone()),
         };
+        a.parts = if split && question.is_some() { part_numbers(&a.label) } else { Vec::new() };
         unescape_code(&mut a.code);
         a.files.iter_mut().for_each(|f| unescape_code(&mut f.code));
         // code quoted from the question is given code, shown as it runs: its errors are the point
@@ -1222,20 +1219,25 @@ fn assign_labels(groups: &mut [Group]) {
 fn heading(base: &str, label: &str, split: bool) -> String {
     let (label, corrected) = label.strip_suffix(" (corrected)").map_or((label, ""), |l| (l, " (corrected)"));
     if !split { return format!("{base}{corrected}") }
-    let dotted = &label[label.find(|c: char| c.is_ascii_digit()).unwrap_or(label.len())..];
-    let parts: String = dotted.split('.').skip(1)
-        .map_while(|p| p.trim().parse::<usize>().ok().filter(|&n| n > 0))
+    let parts: String = part_numbers(label).into_iter()
         .enumerate()
         .map(|(depth, n)| format!("({})", if depth == 0 { letter(n) } else { roman(n) }))
         .collect();
     format!("{base}{parts}{corrected}")
 }
 
-fn letter(n: usize) -> String {
+/// The part positions in a dotted label: `2.2.1 (corrected)` → [2, 1].
+fn part_numbers(label: &str) -> Vec<usize> {
+    let label = label.trim_end_matches(" (corrected)");
+    let dotted = &label[label.find(|c: char| c.is_ascii_digit()).unwrap_or(label.len())..];
+    dotted.split('.').skip(1).map_while(|p| p.trim().parse::<usize>().ok().filter(|&n| n > 0)).collect()
+}
+
+pub fn letter(n: usize) -> String {
     (b'a'..=b'z').nth(n - 1).map_or(n.to_string(), |c| (c as char).to_string())
 }
 
-fn roman(n: usize) -> String {
+pub fn roman(n: usize) -> String {
     ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"].get(n - 1).map_or(n.to_string(), |r| r.to_string())
 }
 

@@ -1,7 +1,10 @@
-import type { Mode, Settings } from "./api";
+import { NUMBERINGS, partLabel, type Mode, type Numbering, type Settings } from "./api";
 
 export const TIP = {
-  theme: "how the terminal screenshots look: which computer, dark or light",
+  terminal: "how the terminal screenshots look: which computer, dark or light",
+  doc: "how the word file looks: fonts, headings, code boxes; edit makes your own",
+  numbering: "how sub-parts are numbered in their headings",
+  labels: "short heads a sub-part with only its own number, under its question's heading; full repeats the whole label",
   window: "which computer the terminal screenshots look like they came from",
   colors: "dark or light terminal in the screenshots",
   username: "your name in the terminal line, like user@laptop",
@@ -36,7 +39,7 @@ function Inline({ k, v, ph, tip, onChange }: { k: string; v: string; ph?: string
   );
 }
 
-export function Toml({ s, set, onMore }: { s: Settings; set: Set; onMore: () => void }) {
+export function Toml({ s, set, themes, onMore }: { s: Settings; set: Set; themes: string[]; onMore: () => void }) {
   const look = `${s.style}-${s.theme}`;
   const next = () => {
     const [style, theme] = LOOKS[(LOOKS.indexOf(look) + 1) % LOOKS.length].split("-") as [Settings["style"], Settings["theme"]];
@@ -45,7 +48,8 @@ export function Toml({ s, set, onMore }: { s: Settings; set: Set; onMore: () => 
   return (
     <div className="toml">
       <div className="muted"># settings.toml</div>
-      <div><span className="k">theme<Tip t={TIP.theme} /></span> = <button className="v" onClick={next}>"{look}"</button></div>
+      <div><span className="k">terminal<Tip t={TIP.terminal} /></span> = <button className="v" onClick={next}>"{look}"</button></div>
+      <div><span className="k">doc<Tip t={TIP.doc} /></span> = <button className="v" onClick={() => set({ doc_theme: themes[(themes.indexOf(s.doc_theme) + 1) % themes.length] ?? "current" })}>"{s.doc_theme}"</button></div>
       <Inline k="username" v={s.username} tip={TIP.username} onChange={username => set({ username })} />
       <Inline k="hostname" v={s.hostname} tip={TIP.hostname} onChange={hostname => set({ hostname })} />
       <Inline k="dir" v={s.cwd} tip={TIP.dir} onChange={cwd => set({ cwd })} />
@@ -55,7 +59,7 @@ export function Toml({ s, set, onMore }: { s: Settings; set: Set; onMore: () => 
   );
 }
 
-function Seg<T extends string>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
+export function Seg<T extends string>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
   return <div className="seg">{options.map(([v, label]) => <button key={v} aria-pressed={v === value} onClick={() => onChange(v)}>{label}</button>)}</div>;
 }
 
@@ -68,11 +72,11 @@ function Text({ label, tip, value, ph, onChange, stack, masked }: { label: strin
   );
 }
 
-function Switch({ label, tip, checked, onChange }: { label: string; tip: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return <label className="row"><span>{label}<Tip t={tip} /></span><input type="checkbox" className="sw" checked={checked} onChange={e => onChange(e.target.checked)} /></label>;
+export function Switch({ label, tip, checked, onChange }: { label: string; tip?: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return <label className="row"><span>{label}{tip && <Tip t={tip} />}</span><input type="checkbox" className="sw" checked={checked} onChange={e => onChange(e.target.checked)} /></label>;
 }
 
-export function SettingsView({ mode, s, set, apiKey, setApiKey, onBack }: { mode: Mode; s: Settings; set: Set; apiKey: string; setApiKey: (k: string) => void; onBack: () => void }) {
+export function SettingsView({ mode, s, set, themes, onEditTheme, apiKey, setApiKey, onBack }: { mode: Mode; s: Settings; set: Set; themes: string[]; onEditTheme: () => void; apiKey: string; setApiKey: (k: string) => void; onBack: () => void }) {
   return (
     <div className="cfg">
       <header className="cfg-head"><h1 className="title">settings</h1><button className="btn small" onClick={onBack}>back</button></header>
@@ -101,6 +105,20 @@ export function SettingsView({ mode, s, set, apiKey, setApiKey, onBack }: { mode
         </label>
         <Text label="file name" tip={TIP.file} value={s.output} ph={mode === "solve" ? "{}_solved" : "{}_pack"} onChange={output => set({ output })} />
         <Switch label={mode === "solve" ? "new page per question" : "new page per file"} tip={TIP.pages} checked={s.page_break} onChange={page_break => set({ page_break })} />
+        <div className="row"><span>theme<Tip t={TIP.doc} /></span>
+          <span className="pick">
+            <select className="ri" value={s.doc_theme} aria-label="theme" onChange={e => set({ doc_theme: e.target.value })}>{themes.map(n => <option key={n}>{n}</option>)}</select>
+            <button className="btn small" onClick={onEditTheme}>edit</button>
+          </span>
+        </div>
+        {mode === "solve" && <>
+          <label className="row"><span>numbering<Tip t={TIP.numbering} /></span>
+            <select className="ri" value={s.numbering} onChange={e => set({ numbering: e.target.value as Numbering })}>{NUMBERINGS.map(n => <option key={n}>{n}</option>)}</select>
+          </label>
+          <div className="row"><span>parts<Tip t={TIP.labels} /></span>
+            <Seg value={s.full_labels ? "full" : "short"} options={[["short", partLabel(s.numbering, false, "1", [2, 1])], ["full", partLabel(s.numbering, true, "1", [2, 1])]]} onChange={v => set({ full_labels: v === "full" })} />
+          </div>
+        </>}
       </div>
       {mode === "solve" && <>
         <h2 className="sec">answers</h2>

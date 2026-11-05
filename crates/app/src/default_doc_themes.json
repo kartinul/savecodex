@@ -1,0 +1,88 @@
+[
+  { "name": "current" },
+  {
+    "name": "classic",
+    "margin": 2.54, "margin_top": 2.54, "font": "Calibri", "size": 11, "line": 1.08, "gap": 8,
+    "title": { "font": "Calibri", "size": 26, "center": false },
+    "headings": [
+      { "size": 16, "color": "2F5496", "before": 12 },
+      { "size": 13, "color": "2F5496", "before": 6 },
+      { "size": 12, "color": "1F3763", "before": 4 }
+    ],
+    "code_font": "Consolas", "code_size": 10
+  },
+  {
+    "name": "academic",
+    "margin": 2.54, "margin_top": 2.54, "font": "Times New Roman", "size": 12, "line": 1.5, "gap": 6,
+    "title": { "size": 16, "bold": true, "center": true },
+    "headings": [
+      { "size": 14, "bold": true, "before": 12 },
+      { "size": 12, "bold": true, "before": 6 },
+      { "size": 12, "bold": true, "italic": true, "before": 4 }
+    ],
+    "question": { "italic": true },
+    "code_font": "Courier New", "code_size": 10, "code_box": "border",
+    "shots_center": true, "page_numbers": true
+  },
+  {
+    "name": "modern",
+    "margin": 2.2, "margin_top": 2.2, "font": "Arial", "size": 11, "line": 1.15, "gap": 6,
+    "title": { "size": 28, "bold": true, "center": false, "rule": true, "color": "0F766E" },
+    "headings": [
+      { "size": 16, "bold": true, "color": "0F766E", "before": 14 },
+      { "size": 13, "bold": true, "color": "0F766E", "before": 8 },
+      { "size": 11, "bold": true, "color": "334155", "before": 4 }
+    ],
+    "question": { "color": "475569" },
+    "code_font": "Consolas", "code_size": 10, "code_box": "shade",
+    "shots": "medium", "shots_center": true, "page_numbers": true
+  },
+  {
+    "name": "lab record",
+    "margin": 2.54, "margin_top": 2.54, "font": "Times New Roman", "size": 12, "line": 1.15, "gap": 4,
+    "title": { "size": 18, "bold": true, "underline": true, "center": true },
+    "headings": [
+      { "size": 14, "bold": true, "before": 12 },
+      { "size": 12, "bold": true, "before": 6 },
+      { "size": 12, "bold": true, "before": 4 }
+    ],
+    "code_font": "Courier New", "code_size": 10, "code_box": "border",
+    "labels": true, "page_numbers": true
+  },
+  {
+    "name": "compact",
+    "margin": 1.27, "margin_top": 1.27, "font": "Calibri", "size": 10, "line": 1.0, "gap": 2,
+    "title": { "size": 18, "bold": true, "center": false },
+    "headings": [
+      { "size": 12, "bold": true, "before": 6 },
+      { "size": 11, "bold": true, "before": 3 },
+      { "size": 10, "bold": true, "before": 2 }
+    ],
+    "code_font": "Consolas", "code_size": 9,
+    "shots": "medium"
+  },
+  {
+    "name": "typewriter",
+    "margin": 2.54, "margin_top": 2.54, "font": "Courier New", "size": 11, "line": 1.0, "gap": 6,
+    "title": { "size": 16, "bold": true, "center": true },
+    "headings": [
+      { "size": 12, "bold": true, "underline": true, "before": 12 },
+      { "size": 11, "bold": true, "before": 6 },
+      { "size": 11, "bold": true, "before": 4 }
+    ],
+    "code_font": "Courier New", "code_size": 10
+  },
+  {
+    "name": "elegant",
+    "margin": 2.8, "margin_top": 3.0, "font": "Georgia", "size": 11, "line": 1.2, "gap": 6,
+    "title": { "size": 26, "center": true, "color": "1F3A5F" },
+    "headings": [
+      { "size": 15, "color": "1F3A5F", "rule": true, "before": 14 },
+      { "size": 12, "bold": true, "color": "1F3A5F", "before": 8 },
+      { "size": 11, "italic": true, "color": "1F3A5F", "before": 4 }
+    ],
+    "question": { "italic": true, "color": "4B5563" },
+    "code_font": "Consolas", "code_size": 10, "code_box": "shade",
+    "shots_center": true, "page_numbers": true
+  }
+]

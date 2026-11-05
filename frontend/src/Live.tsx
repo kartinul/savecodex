@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { shotUrl, type Mode, type Settings, type State } from "./api";
+import { partLabel, shotUrl, type DocTheme, type Look, type Mode, type Settings, type State } from "./api";
 import { Ticker, type Step } from "./Ticker";
 
 export type Tile = { id: string; title: string; state: State; note: string; code: string; written: boolean; output: string; shots: number[]; since: number };
@@ -120,25 +120,78 @@ export function Idle({ mode, preview }: { mode: Mode; preview: string }) {
   );
 }
 
-/** How the document will come out, drawn from the settings, so changes show up while customizing. */
-export function DocPreview({ mode, s, name, preview }: { mode: Mode; s: Settings; name: string; preview: string }) {
-  const fill = (t: string) => t.split("{}").join(name);
-  const heading = (i: number) => mode === "solve" ? `Question ${i}` : `${i}. ${i === 1 ? "fact" : "fib"}`;
-  const first = <><h2>{heading(1)}</h2><pre>{SAMPLE}</pre><img src={preview} alt="" /></>;
-  const second = <><h2>{heading(2)}</h2>{mode === "solve"
-    ? <p>An array keeps its elements next to each other in memory, so any element can be read straight from its index.</p>
-    : <pre>{SAMPLE.split("\n").slice(0, 4).join("\n")}</pre>}</>;
+const PT = 100 / 595; // cqw per point: an A4 page is 595pt wide
+const FAMILY: Record<string, string> = {
+  Calibri: "Calibri, Carlito, 'Helvetica Neue', Arial, sans-serif",
+  Cambria: "Cambria, Caladea, Georgia, serif",
+  "Times New Roman": "'Times New Roman', Tinos, Times, serif",
+  Arial: "Arial, Arimo, Helvetica, sans-serif",
+  Georgia: "Georgia, Gelasio, serif",
+  Consolas: "Consolas, Inconsolata, Menlo, monospace",
+  "Courier New": "'Courier New', Cousine, Courier, monospace",
+};
+const family = (font: string) => FAMILY[font] ?? font;
+
+const looks = (l: Look): React.CSSProperties => ({
+  fontFamily: l.font ? family(l.font) : undefined,
+  fontSize: l.size ? `${l.size * PT}cqw` : undefined,
+  color: l.color ? `#${l.color}` : undefined,
+  fontWeight: l.bold ? 700 : 400,
+  fontStyle: l.italic ? "italic" : undefined,
+  textDecoration: l.underline ? "underline" : undefined,
+  textAlign: l.center ? "center" : undefined,
+  borderBottom: l.rule ? `${PT}cqw solid ${l.color ? `#${l.color}` : "currentColor"}` : undefined,
+  marginTop: `${l.before * PT}cqw`,
+});
+
+/** How the document will come out, drawn from the settings and doc theme, so changes show up while customizing. */
+export function DocPreview({ mode, s, t, name, preview }: { mode: Mode; s: Settings; t: DocTheme; name: string; preview: string }) {
+  const fill = (text: string) => text.split("{}").join(name);
+  const cm = (v: number) => `${v / 21 * 100}cqw`;
+  const sheet: React.CSSProperties = {
+    padding: `${cm(t.margin_top)} ${cm(t.margin)}`, fontFamily: family(t.font), fontSize: `${t.size * PT}cqw`,
+    lineHeight: 1.15 * t.line, gap: `${t.gap * PT}cqw`,
+  };
+  const page: React.CSSProperties = { aspectRatio: t.paper === "letter" ? "1 / 1.294" : "1 / 1.414" };
+  const h = (level: 1 | 2 | 3, text: string) => {
+    const H = (["h2", "h3", "h4"] as const)[level - 1];
+    return <H style={looks(t.headings[level - 1])}>{text}</H>;
+  };
+  const part = (parts: number[]) => partLabel(s.numbering, s.full_labels, "1", parts);
+  const box = t.code_box !== "none";
+  const code = (text: string) => <>
+    {t.labels && <p style={{ fontWeight: 700 }}>Code:</p>}
+    <pre style={{ fontFamily: family(t.code_font || t.font), fontSize: `${t.code_size * PT}cqw`, background: t.code_box === "shade" ? "#F2F2F2" : undefined, border: t.code_box === "border" ? "1px solid #808080" : undefined, padding: box ? "1cqw" : undefined }}>{text}</pre>
+  </>;
+  const shot = <>
+    {t.labels && <p style={{ fontWeight: 700 }}>Output:</p>}
+    <img src={preview} alt="" style={{ width: { small: "50%", medium: "75%", full: "100%" }[t.shots], margin: t.shots_center ? "0 auto" : undefined }} />
+  </>;
+  const first = mode === "solve" ? <>
+    {h(1, `${t.prefix}1`)}
+    {h(2, part([1]))}
+    {t.show_question && <p style={looks(t.question)}>Write a program that reads a number and prints its factorial.</p>}
+    {code(SAMPLE)}
+    {shot}
+    {h(2, part([2]))}
+    {h(3, part([2, 1]))}
+    <p>An array keeps its elements next to each other in memory, so any element can be read straight from its index.</p>
+  </> : <>{h(1, "1. fact")}{code(SAMPLE)}{shot}</>;
+  const second = mode === "solve"
+    ? <>{h(1, `${t.prefix}2`)}<p>A stack adds and removes elements from the same end, so the last one in is the first one out.</p></>
+    : <>{h(1, "2. fib")}{code(SAMPLE.split("\n").slice(0, 4).join("\n"))}</>;
+  const number = (n: number) => t.page_numbers && <span className="page-num" style={{ bottom: cm(1.2) }}>{n}</span>;
   return (
     <section className="pages" aria-label="Document preview">
       <p># how {fill(s.output || (mode === "solve" ? "{}_solved" : "{}_pack"))}.docx will look</p>
-      <article className="page"><div className="sheet">
-        <h1>{fill(s.doc_title) || name}</h1>
+      <article className="page" style={page}><div className="sheet" style={sheet}>
+        <h1 style={looks(t.title)}>{fill(s.doc_title) || name}</h1>
         {s.doc_text && <pre>{fill(s.doc_text)}</pre>}
         <div className="gap" />
         {first}
         {!s.page_break && <><div className="gap" />{second}</>}
-      </div></article>
-      {s.page_break && <article className="page"><div className="sheet">{second}</div></article>}
+      </div>{number(1)}</article>
+      {s.page_break && <article className="page" style={page}><div className="sheet" style={sheet}>{second}</div>{number(2)}</article>}
     </section>
   );
 }
