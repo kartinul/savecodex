@@ -17,7 +17,7 @@ use crate::{embed::Frontend, routes};
 /// Start the axum server on `host:port`.
 pub async fn start(host: &str, port: u16) -> Result<()> {
     crate::ai::resolve(crate::ai::Tier::Smart)?;
-    tracing::info!("Solving with {}", crate::ai::describe(crate::ai::Tier::Smart));
+    tracing::info!("Extracting with {}, solving with {}", crate::ai::describe(crate::ai::Tier::Smart), crate::ai::describe(crate::ai::Tier::Mid));
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

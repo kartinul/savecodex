@@ -236,7 +236,7 @@ struct AiArgs {
     #[arg(long, env = "FAST_THINKING")]
     fast_thinking: Option<String>,
 
-    /// Retries for a failed AI call: gateway errors, rate limits and replies that don't parse [default: 3].
+    /// Retries for a failed AI call: gateway errors, rate limits and replies that don't parse [default: 5].
     #[arg(long, env = "SAVECODEX_RETRIES")]
     retries: Option<String>,
 
@@ -250,6 +250,15 @@ impl AiArgs {
         if self.local {
             let ollama = || Some("ollama".to_string());
             (self.smart_provider, self.mid_provider, self.fast_provider) = (ollama(), ollama(), ollama());
+        }
+        // `-p` on the command line beats MID/FAST providers left in the environment
+        let given = |flags: &[&str]| std::env::args().any(|a| flags.iter().any(|f| a == *f || a.starts_with(&format!("{f}="))));
+        if given(&["--provider", "--smart-provider"]) || std::env::args().any(|a| a.starts_with("-p")) {
+            for (provider, model, tier) in [(&mut self.mid_provider, &mut self.mid_model, "mid"), (&mut self.fast_provider, &mut self.fast_model, "fast")] {
+                if given(&[&format!("--{tier}-provider")]) { continue }
+                *provider = self.smart_provider.clone();
+                if !given(&[&format!("--{tier}-model")]) { *model = Some(String::new()) }
+            }
         }
         let values = [
             ("SMART_PROVIDER", self.smart_provider), ("SMART_MODEL", self.smart_model), ("SMART_THINKING", self.smart_thinking),

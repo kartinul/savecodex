@@ -88,7 +88,7 @@ const GEMINI_MODELS: [&str; 3] = [
 const AGENT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Starting many agent processes at once trips server-side burst limits.
 const AGENT_START_GAP: Duration = Duration::from_millis(300);
-const DEFAULT_RETRIES: usize = 3;
+const DEFAULT_RETRIES: usize = 5;
 
 #[derive(Clone, Debug)]
 pub enum Provider {

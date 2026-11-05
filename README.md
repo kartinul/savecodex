@@ -181,7 +181,7 @@ Read from the shell or the first `.env` in the current directory or a parent. CL
 | `{TIER}_API_KEY`, `{TIER}_BASE_URL` | none | Needed for `openai` |
 | `GEMINI_API_KEY` | none | Gemini key, also the last fallback after agent CLIs |
 | `OLLAMA_HOST` | `http://localhost:11434` | |
-| `SAVECODEX_RETRIES` | `3` | `--retries` for a failed AI call |
+| `SAVECODEX_RETRIES` | `5` | `--retries` for a failed AI call |
 | `SAVECODEX_AGENT_JOBS` | no limit | Max calls at once per agent CLI |
 
 Every tier setting also has a flag (`--mid-provider`, `--fast-model`, ...) and most other flags read a `SAVECODEX_*` var, `--help` lists them. Default models:

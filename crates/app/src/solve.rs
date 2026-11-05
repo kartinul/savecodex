@@ -20,6 +20,7 @@ use crate::term_gen::TermGenOptions;
 struct Extracted {
     #[serde(default)]
     language: String,
+    #[serde(deserialize_with = "skip_bad")]
     groups: Vec<Group>,
 }
 
@@ -27,6 +28,7 @@ struct Extracted {
 struct Group {
     #[serde(default, deserialize_with = "lenient")]
     setup: Option<Setup>,
+    #[serde(default, deserialize_with = "skip_bad")]
     questions: Vec<Question>,
 }
 
@@ -52,6 +54,7 @@ struct Question {
 #[derive(Clone, Deserialize, Serialize)]
 struct Solved {
     title: String,
+    #[serde(deserialize_with = "skip_bad")]
     answers: Vec<Answer>,
 }
 
@@ -175,6 +178,13 @@ fn lenient<'de, D: serde::Deserializer<'de>, T: DeserializeOwned>(d: D) -> Resul
     Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).ok())
 }
 
+/// A malformed item in a list is dropped instead of failing the whole reply.
+fn skip_bad<'de, D: serde::Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {
+    Ok(Vec::<serde_json::Value>::deserialize(d)?.into_iter().filter_map(|item| {
+        serde_json::from_value(item).inspect_err(|e| tracing::warn!("dropped a malformed item from the reply: {e}")).ok()
+    }).collect())
+}
+
 /// Everything read from the input files.
 #[derive(Default)]
 struct Inputs {
@@ -216,6 +226,7 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
         group.setup = group.setup.take().filter(|s| !s.code.trim().is_empty()).or_else(|| last_setup.clone());
         last_setup = group.setup.clone();
     }
+    extracted.groups.retain(|g| !g.questions.is_empty());
     assign_labels(&mut extracted.groups);
     let doc = normalized(&read.text);
     // the text first: a bare title ("3") also matches numbered notes and headings before the question
@@ -1349,13 +1360,16 @@ fn strip_fences(text: &str) -> &str {
 
 /// Ask for JSON, asking again (up to `--retries` times) when the reply doesn't parse.
 async fn ask_json<T: DeserializeOwned>(tier: Tier, parts: &[Part]) -> Result<T> {
+    let mut parts = parts.to_vec();
     for attempt in 0.. {
-        let reply = ask(tier, parts, true).await?;
+        let reply = ask(tier, &parts, true).await?;
         tracing::debug!("AI reply: {reply}");
         match parse_json(&reply) {
             Err(e) if attempt < crate::ai::max_retries() => {
                 count(&STATS.bad_json, 1);
                 tracing::warn!("bad JSON from model, retry {}/{}: {e:#}", attempt + 1, crate::ai::max_retries());
+                if attempt > 0 { parts.pop(); }
+                parts.push(Part::Text(format!("\n\nYour last reply could not be used: {}. Reply again with the whole JSON, exactly in the format asked above.", e.root_cause())));
             }
             result => return result,
         }
@@ -1370,7 +1384,7 @@ fn parse_json<T: DeserializeOwned>(text: &str) -> Result<T> {
         let mut values = serde_json::Deserializer::from_str(json).into_iter::<T>();
         let value = values.next().context("no JSON in reply")??;
         // a value followed by `,` `]` `}` sits inside a bigger one (`"files":[]` reads as no answers)
-        if json[values.byte_offset()..].trim_start().starts_with([',', ']', '}', ':']) { bail!("JSON nested in a reply that doesn't parse") }
+        if json[values.byte_offset()..].trim_start().starts_with([',', ']', '}', ':']) { bail!("the JSON closes too early and more of it follows (unbalanced brackets)") }
         Ok(value)
     };
     let mut first_err = None;
