@@ -35,6 +35,9 @@ pub struct LangConfig {
     /// Line comment markers; session lines starting with one are dropped before typing.
     #[serde(default)]
     pub comments: Vec<String>,
+    /// Indentation is syntax (Python): `--level` only shifts whole blocks.
+    #[serde(default)]
+    pub offside: bool,
     /// Advice for the AI on writing answers in this language.
     #[serde(default)]
     pub hint: Option<String>,

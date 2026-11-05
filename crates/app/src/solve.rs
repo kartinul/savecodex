@@ -104,6 +104,8 @@ pub struct SolveOptions {
     pub max_pages: usize,
     /// `--check`: the confidence a SMART "bad" grade needs to redo an answer; None skips grading.
     pub check: Option<f32>,
+    /// `--level`: how professional the code looks, 1 to 5.
+    pub level: u8,
     /// Shared by every document solved at once, so `jobs` caps them together.
     pub sem: Arc<Semaphore>,
     /// Prefix for progress lines when several documents run at once.
@@ -334,13 +336,13 @@ async fn solve_group(
     }
     let ev = opts.events.as_ref();
     if let Some(ev) = ev { group.questions.iter().for_each(|q| ev.step(&q.title, "writing", "")) }
-    let mut solved = solve_questions(n, group, langs).await?;
+    let mut solved = solve_questions(n, group, langs, opts.level).await?;
     solved.iter_mut().for_each(|s| prepare(s, group, configs));
     if let Some(ev) = ev { solved.iter().for_each(|s| send_code(ev, s, "running", "")) }
 
     let ns = format!("sc{:06x}{n}_", *RUN_ID);
     let mut runs = run_all(n, &ns, group, &mut solved, configs, dir, None, Runs::default()).await?;
-    let redone: Vec<(usize, Solved)> = review(n, group, &solved, &runs, configs, langs, doc_lang, dir, opts.check).await.into_iter()
+    let redone: Vec<(usize, Solved)> = review(n, group, &solved, &runs, configs, langs, doc_lang, dir, opts.check, opts.level).await.into_iter()
         .filter_map(|mut s| {
             prepare(&mut s, group, configs);
             let qi = solved.iter().position(|x| x.title == s.title)?;
@@ -381,6 +383,11 @@ async fn solve_group(
         .flat_map(|(.., a)| a.files.iter().map(|f| format!("{}:\n{}", f.name, f.code)).chain(Some(format!("{}:\n{}", a.heading, a.code))))
         .collect::<Vec<_>>().join("\n\n");
 
+    // only shown code gets messy indentation, after it ran clean
+    let messy = |code: &str, lang: Option<&str>| match lang.and_then(|l| configs.get(l)) {
+        Some(c) if !c.session && !c.image => crate::sloppy::indent(code, opts.level, c.offside),
+        _ => code.to_string(),
+    };
     for (idx, (qi, q, i, a)) in answers.iter().enumerate() {
         let question = group.questions.iter().find(|x| x.title == q.title);
         let mut term = opts.term.clone();
@@ -389,7 +396,7 @@ async fn solve_group(
             // a corrected answer continues under the heading of the one it corrects
             heading: Some(question.map_or_else(|| a.heading.replace(" (corrected)", ""), |q| q.label.clone())),
             parts: a.parts.clone(),
-            content: a.code.clone(),
+            content: messy(&a.code, a.lang.as_deref()),
             answer: plain_text(&a.answer),
             question: question.filter(|_| (opts.questions || opts.theme.show_question) && *i == 0).map(question_text).unwrap_or_default(),
             ..Default::default()
@@ -456,7 +463,10 @@ async fn solve_group(
         let files: Vec<&NamedFile> = a.files.iter().filter(|f| f.code.trim() != a.code.trim()).filter(is_code).collect();
         if !files.is_empty() {
             let named = files.len() > 1;
-            let files = files.iter().map(|f| if named { format!("{}:\n{}", f.name, f.code) } else { f.code.clone() });
+            let files = files.iter().map(|f| {
+                let code = messy(&f.code, Path::new(&f.name).extension().and_then(|e| e.to_str()));
+                if named { format!("{}:\n{code}", f.name) } else { code }
+            });
             item.content = files.chain(Some(item.content.clone()).filter(|c| !c.is_empty())).collect::<Vec<_>>().join("\n\n");
         }
         if let (true, Some(out)) = (a.answer_after_run, &output) {
@@ -504,7 +514,7 @@ fn send_code(ev: &Emitter, s: &Solved, state: &'static str, note: &str) {
 }
 
 /// Asks for the group's answers a few questions at a time, since big groups in one call outlast gateway timeouts.
-async fn solve_questions(n: usize, group: &Group, langs: &str) -> Result<Vec<Solved>> {
+async fn solve_questions(n: usize, group: &Group, langs: &str, level: u8) -> Result<Vec<Solved>> {
     let mut solved: Vec<Solved> = Vec::new();
     for chunk in group.questions.chunks(QUESTIONS_PER_CALL) {
         let mut todo: Vec<&Question> = chunk.iter().collect();
@@ -512,7 +522,7 @@ async fn solve_questions(n: usize, group: &Group, langs: &str) -> Result<Vec<Sol
         for attempt in 0..=crate::ai::max_retries() {
             let part = serde_json::to_string_pretty(&serde_json::json!({"setup": group.setup, "questions": todo}))?;
             let earlier = if solved.is_empty() { String::new() } else { serde_json::to_string(&solved)? };
-            let mut chunk_solved: Vec<Solved> = ask_json(Tier::Mid, &[Part::Text(solve_prompt(&part, &earlier, langs))]).await
+            let mut chunk_solved: Vec<Solved> = ask_json(Tier::Mid, &[Part::Text(solve_prompt(&part, &earlier, langs, level))]).await
                 .context("solving")?;
             keep_asked(n, &mut chunk_solved, &todo);
             let complete = chunk_solved.len() >= todo.len();
@@ -815,6 +825,7 @@ async fn review(
     doc_lang: Option<&str>,
     dir: &Path,
     check: Option<f32>,
+    level: u8,
 ) -> Vec<Solved> {
     const SHOWN: usize = 3000;
     let shown = |out: &str| -> String {
@@ -831,7 +842,8 @@ async fn review(
             problems.push("it is answered both as a whole and per part: give one answer per part".to_string());
         }
         // written and session answers get one answer per part, so fewer means parts were skipped
-        let parts = group.questions.iter().find(|x| x.title == q.title).map_or(0, |x| x.parts.len());
+        let question = group.questions.iter().find(|x| x.title == q.title);
+        let parts = question.map_or(0, |x| x.parts.len());
         let per_part = q.answers.iter().all(|a| a.lang.as_deref().and_then(|l| configs.get(l)).is_none_or(|c| c.session));
         if per_part && parts > 1 && own.len() < parts {
             problems.push(format!("it has {parts} parts but only {} answer(s): answer every part, one answer per part", own.len()));
@@ -859,6 +871,9 @@ async fn review(
                     Some((cmd, out)) => {
                         if !a.expects_error {
                             if let Some(p) = sketchy(out) { problems.push(format!("{}: {p}", a.heading)) }
+                        }
+                        if crate::sloppy::decorated(out) && !question.is_some_and(|x| crate::sloppy::draws(&x.text)) {
+                            problems.push(format!("{} prints decoration (separator or border lines, emojis): print plain output only", a.heading));
                         }
                         shown(&format!("$ {cmd}\n{out}"))
                     }
@@ -895,7 +910,7 @@ async fn review(
             if first == 0 { Ok(String::new()) } else { serde_json::to_string(&solved[..first]) },
         ) else { continue };
         tracing::warn!("[session {n}] redoing {}: {}", titles.join(", "), chunk.iter().map(|(_, c)| c["problems"].to_string()).collect::<Vec<_>>().join("; "));
-        let prompt = review_prompt(&questions, &checked, &earlier, langs);
+        let prompt = review_prompt(&questions, &checked, &earlier, langs, level);
         // a redo is the second chance after an answer already went wrong, so it gets the stronger model
         set.spawn(crate::ai::inherit(async move { (titles, ask_json::<Vec<Solved>>(Tier::Smart, &[Part::Text(prompt)]).await) }));
     }

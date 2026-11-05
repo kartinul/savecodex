@@ -333,6 +333,11 @@ enum Commands {
         #[arg(long, env = "SAVECODEX_CHECK", num_args = 0..=1, default_missing_value = "0.7", value_name = "CONFIDENCE")]
         check: Option<f32>,
 
+        /// How professional the code looks: 1 is a careless student (meaningless names, broken
+        /// indentation), 3 a student in a hurry (lazy names, ~80% tidy indentation), 5 clean code.
+        #[arg(long, env = "SAVECODEX_LEVEL", default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=5))]
+        level: u8,
+
         /// Your own instructions for the AI (e.g. "use Java", "comment every line"). Every prompt puts
         /// them first and they win over savecodex's own rules, except the reply format.
         #[arg(long, env = "SAVECODEX_INSTRUCTIONS")]
@@ -442,7 +447,7 @@ pub async fn run() -> Result<()> {
                 crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), doc.page_break, &doc.theme()?, &opts, doc.jobs, recursive, doc.ai_input, !doc.no_trim, None).await?;
             }
         }
-        Commands::Solve { inputs, questions, max_pages, check, instructions, doc, shot, ai } => {
+        Commands::Solve { inputs, questions, max_pages, check, level, instructions, doc, shot, ai } => {
             ai.apply();
             let custom_cwd = shot.cwd.is_some();
             let mut term = shot.options();
@@ -480,6 +485,7 @@ pub async fn run() -> Result<()> {
                     questions,
                     max_pages,
                     check,
+                    level,
                     sem: sem.clone(),
                     tag: if multi { name.clone() } else { String::new() },
                     events: None,

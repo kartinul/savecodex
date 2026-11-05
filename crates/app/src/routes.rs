@@ -215,6 +215,7 @@ async fn solve_job(job: &Arc<Job>, files: Vec<PathBuf>, f: &Fields) {
             questions: false,
             max_pages: 60,
             check: (field(f, "check") == Some("true")).then_some(0.7),
+            level: field(f, "level").and_then(|l| l.parse().ok()).unwrap_or(3).clamp(1, 5),
             sem: sem.clone(),
             tag: if multi { name.clone() } else { String::new() },
             events: Some(ev.clone()),

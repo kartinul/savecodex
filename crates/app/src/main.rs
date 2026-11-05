@@ -12,6 +12,7 @@ pub mod docx_gen;
 pub mod doc_theme;
 pub mod solve;
 pub mod linux;
+pub mod sloppy;
 
 
 use anyhow::Result;

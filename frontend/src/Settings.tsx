@@ -18,6 +18,7 @@ export const TIP = {
   file: "the name of the word file you download; {} is the uploaded file name",
   pages: "start each answer on a new page",
   rules: "your own rules the ai follows before anything else, like \"use java\" or \"comment every line\"",
+  level: "how professional the code looks: 1 is a careless student (bad names, messy indents), 5 is clean code",
   check: "the ai grades every answer and redoes the wrong ones; takes longer",
   key: "use your own openai-compatible account instead of the shared one; never saved",
   url: "where your key works; leave empty for openai",
@@ -164,6 +165,12 @@ export function SettingsView({ mode, s, set, themes, onEditTheme, apiKey, setApi
       {mode === "solve" && <>
         <h2 className="sec">answers</h2>
         <div className="rows">
+          <div className="row"><span>level<Tip t={TIP.level} /></span>
+            <span className="messy">
+              <input type="range" min={1} max={5} step={1} value={s.level} aria-label="level" onChange={e => set({ level: +e.target.value })} />
+              <span>{s.level}</span>
+            </span>
+          </div>
           <label className="row stack"><span>ai instructions<Tip t={TIP.rules} /></span>
             <textarea className="ri" rows={3} value={s.instructions} placeholder="use java, keep answers short, comment the code…" onChange={e => set({ instructions: e.target.value })} />
           </label>

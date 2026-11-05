@@ -35,7 +35,7 @@ Document text:
 const ANSWER_FORMAT: &str = r#"[{"title":"<question title>","answers":[{"label":"<label>","lang":"<language or null>","code":"<code>","answer":"","answer_after_run":false,"files":[],"stdin":"","args":[],"expects_error":false}]}]"#;
 
 /// How an answer is written, shared by solving and redoing.
-fn answer_rules(langs: &str) -> String {
+fn answer_rules(langs: &str, level: u8) -> String {
     format!(r#"Languages:
 {langs}
 - null: nothing to run.
@@ -43,7 +43,8 @@ fn answer_rules(langs: &str) -> String {
 Rules:
 - title: the question's title exactly as given.
 - label: dotted numbers only: the number in the question's label (2 or Practice Q2 → 2; 1 if it has none), then the position of the part at each level, counted in order whatever markers the question uses (whole question 2 → 2; its second part → 2.2; that part's first sub-part → 2.2.1). A corrected version of a failing answer adds " (corrected)". No other words.
-- Write only what the question asks for. No extra features, menus, validation, helper code, comments or options it didn't ask for or give. Clean code, consistent indentation, clear names.
+- Write only what the question asks for. No extra features, menus, validation, helper code, comments or options it didn't ask for or give. {}
+- Output stays plain, like a student's program: no banners, separator or border lines (===, ---, ***), boxes, emojis or decorative headings.
 - One answer per thing to show. A program usually covers all parts of its question; split only when the parts are separate programs. Session languages and answers that don't run get one answer per part. A question gets either one answer for all of it or one per part, never both.
 - lang: the language the question names, else the one that fits. Anything a person does by hand rather than runs (keys typed in an editor such as vi, vim or nano, GUI steps, theory) is null with code "": answer holds just the keys, commands or explanation, one short answer per part. Something to draw (a diagram, chart or page) is never null, even when the question names a tool to draw it with.
 - Every output becomes a screenshot, so keep it short: small realistic sample data, only the files the task needs, no commands that print hundreds of lines. When a task works on existing files or data, create a few small samples first so the run shows real results.
@@ -58,7 +59,7 @@ Rules:
 - Code given in the question to run, test, analyse or correct is used verbatim with expects_error true; if it fails, a corrected version follows as another answer. Whether given code works and what is wrong with it is answer_after_run, never answer.
 - Most answers have answer "" and answer_after_run false. Never describe the code, the steps or the output unless the question asks for it.
 - answer: shown below the screenshot. Only when the task asks to explain, compare, identify, justify, list or write something that doesn't depend on the output (an essay, report or email goes here). Plain text only, no markdown. Never put code here. Otherwise "".
-- answer_after_run: true only when the question asks for something that depends on the actual output (observe the behaviour, compare counts, analyse the output). It is written after the run and shown below the screenshot; don't repeat it in answer."#)
+- answer_after_run: true only when the question asks for something that depends on the actual output (observe the behaviour, compare counts, analyse the output). It is written after the run and shown below the screenshot; don't repeat it in answer."#, crate::sloppy::rules(level))
 }
 
 fn earlier_answers(earlier: &str) -> String {
@@ -68,13 +69,13 @@ fn earlier_answers(earlier: &str) -> String {
 }
 
 /// `solve` step 2: answer one group of questions.
-pub fn solve_prompt(group_json: &str, earlier: &str, langs: &str) -> String {
+pub fn solve_prompt(group_json: &str, earlier: &str, langs: &str, level: u8) -> String {
     format!("Complete these tasks. Return ONLY this JSON, no markdown, one entry per question in order:\n{ANSWER_FORMAT}\n\n{}\n\nQuestions:\n{group_json}{}",
-        answer_rules(langs), earlier_answers(earlier))
+        answer_rules(langs, level), earlier_answers(earlier))
 }
 
 /// `solve`: redo questions whose answers went wrong when they ran.
-pub fn review_prompt(group_json: &str, answers_json: &str, earlier: &str, langs: &str) -> String {
+pub fn review_prompt(group_json: &str, answers_json: &str, earlier: &str, langs: &str, level: u8) -> String {
     format!(r#"These questions' answers went wrong when they ran: each lists its problems, and each answer shows what it printed. Redo every one of them so its problems are gone. Keep the kind of answer it has (written answers stay written, diagrams stay diagrams), what already works, and every name, table, file and object it creates, since later answers use them. Show every case in one run, as the rules say: never split one program into near-duplicate copies, and add no comments.
 
 Return ONLY JSON, no markdown, one entry per question, each with all of its answers, in this format:
@@ -86,7 +87,7 @@ Questions:
 {group_json}
 
 Answers, what they printed and their problems:
-{answers_json}{}"#, answer_rules(langs), earlier_answers(earlier))
+{answers_json}{}"#, answer_rules(langs, level), earlier_answers(earlier))
 }
 
 /// `solve --check`: grade each answer from what it printed or drew.

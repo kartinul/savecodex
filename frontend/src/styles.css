@@ -30,7 +30,11 @@ h1, h2, h3, p, figure, pre, ul { margin: 0 }
   .side { overflow: hidden auto; border-left: 1px solid var(--line) }
 }
 .main { min-width: 0; padding: 18px 24px 100px; display: flex; flex-direction: column; gap: 22px }
+.brand { align-self: flex-start; border: 0; padding: 0; background: none; color: inherit; cursor: pointer }
 .brand::before { content: "$_ "; color: var(--accent) }
+.credit { margin-top: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none }
+.credit:hover { color: var(--accent) }
+.closed .credit { display: none }
 .side { position: relative; background: var(--panel); padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0 }
 .grip { display: none }
 @media (min-width: 900px) {

@@ -17,6 +17,7 @@ export type Settings = {
   numbering: Numbering;
   full_labels: boolean;
   check: boolean;
+  level: number;
   instructions: string;
   base_url: string;
   model: string;
@@ -24,7 +25,7 @@ export type Settings = {
 
 export const DEFAULTS: Settings = {
   style: "windows", theme: "dark", username: "user", hostname: "laptop", cwd: "lab", messy: 0, min_cols: 80, seed: 1,
-  doc_title: "", doc_text: "", output: "", page_break: false, doc_theme: "current", numbering: "1(b)(i)", full_labels: false, check: false, instructions: "", base_url: "", model: "",
+  doc_title: "", doc_text: "", output: "", page_break: false, doc_theme: "current", numbering: "1(b)(i)", full_labels: false, check: false, level: 3, instructions: "", base_url: "", model: "",
 };
 
 export type Numbering = "1(b)(i)" | "1(2)(1)" | "1.b.i" | "1.2.1";
@@ -91,7 +92,7 @@ export async function startJob(mode: Mode, uploads: Upload[], s: Settings, theme
   const body = new FormData();
   const fields: Record<string, string> = {
     ...shotFields(s), doc_title: s.doc_title, doc_text: s.doc_text, output: s.output,
-    page_break: String(s.page_break), doc_theme: theme ? JSON.stringify({ ...theme, numbering: s.numbering, full_labels: s.full_labels }) : s.doc_theme, check: String(s.check), instructions: s.instructions, api_key: apiKey, base_url: s.base_url, model: s.model,
+    page_break: String(s.page_break), doc_theme: theme ? JSON.stringify({ ...theme, numbering: s.numbering, full_labels: s.full_labels }) : s.doc_theme, check: String(s.check), level: String(s.level), instructions: s.instructions, api_key: apiKey, base_url: s.base_url, model: s.model,
   };
   for (const [k, v] of Object.entries(fields)) body.append(k, v);
   for (const u of uploads) body.append(u.path, u.file, u.file.name);
