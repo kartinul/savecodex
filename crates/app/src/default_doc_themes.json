@@ -1,15 +1,26 @@
 [
   { "name": "current" },
   {
-    "name": "classic",
-    "margin": 2.54, "margin_top": 2.54, "font": "Calibri", "size": 11, "line": 1.08, "gap": 8,
-    "title": { "font": "Calibri", "size": 26, "center": false },
+    "name": "word",
+    "margin": 2.54, "margin_top": 2.54, "font": "Aptos", "size": 12, "line": 1.158333, "gap": 8, "kern": true,
+    "title": { "font": "Aptos Display", "size": 28, "center": false, "spacing": -0.5, "after": 4, "line": 1 },
     "headings": [
-      { "size": 16, "color": "2F5496", "before": 12 },
-      { "size": 13, "color": "2F5496", "before": 6 },
-      { "size": 12, "color": "1F3763", "before": 4 }
+      { "font": "Aptos Display", "size": 20, "bold": false, "color": "0F4761", "before": 18, "after": 4 },
+      { "font": "Aptos Display", "size": 16, "bold": false, "color": "0F4761", "before": 8, "after": 4 },
+      { "size": 14, "bold": false, "color": "0F4761", "before": 8, "after": 4 }
     ],
-    "code_font": "Consolas", "code_size": 10
+    "code_size": 12
+  },
+  {
+    "name": "word calibri",
+    "margin": 2.54, "margin_top": 2.54, "font": "Calibri", "size": 11, "line": 1.079167, "gap": 8, "kern": true,
+    "title": { "font": "Calibri Light", "size": 28, "center": false, "spacing": -0.5, "after": 4, "line": 1 },
+    "headings": [
+      { "font": "Calibri Light", "size": 20, "bold": false, "color": "2F5496", "before": 18, "after": 4 },
+      { "font": "Calibri Light", "size": 16, "bold": false, "color": "2F5496", "before": 8, "after": 4 },
+      { "size": 14, "bold": false, "color": "2F5496", "before": 8, "after": 4 }
+    ],
+    "code_size": 11
   },
   {
     "name": "academic",

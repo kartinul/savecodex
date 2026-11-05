@@ -122,6 +122,9 @@ export function Idle({ mode, preview }: { mode: Mode; preview: string }) {
 
 const PT = 100 / 595; // cqw per point: an A4 page is 595pt wide
 const FAMILY: Record<string, string> = {
+  Aptos: "Aptos, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+  "Aptos Display": "'Aptos Display', Aptos, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+  "Calibri Light": "'Calibri Light', Carlito, Calibri, 'Helvetica Neue', sans-serif",
   Calibri: "Calibri, Carlito, 'Helvetica Neue', Arial, sans-serif",
   Cambria: "Cambria, Caladea, Georgia, serif",
   "Times New Roman": "'Times New Roman', Tinos, Times, serif",
@@ -142,6 +145,9 @@ const looks = (l: Look): React.CSSProperties => ({
   textAlign: l.center ? "center" : undefined,
   borderBottom: l.rule ? `${PT}cqw solid ${l.color ? `#${l.color}` : "currentColor"}` : undefined,
   marginTop: `${l.before * PT}cqw`,
+  marginBottom: l.after == null ? undefined : `${l.after * PT}cqw`,
+  lineHeight: l.line == null ? undefined : 1.15 * l.line,
+  letterSpacing: l.spacing ? `${l.spacing * PT}cqw` : undefined,
 });
 
 /** How the document will come out, drawn from the settings and doc theme, so changes show up while customizing. */

@@ -44,6 +44,9 @@ function LookRows({ look, onChange }: { look: Look; onChange: (l: Look) => void 
       </span>
     </label>
     <Num label="space above (pt)" value={look.before} onChange={before => set({ before })} />
+    <label className="row"><span>space below (pt)</span>
+      <input className="ri num" type="number" min={0} max={72} value={look.after ?? ""} placeholder="text" onChange={e => set({ after: e.target.value === "" ? null : +e.target.value })} />
+    </label>
   </>;
 }
 

@@ -30,16 +30,19 @@ export const DEFAULTS: Settings = {
 export type Numbering = "1(b)(i)" | "1(2)(1)" | "1.b.i" | "1.2.1";
 export const NUMBERINGS: Numbering[] = ["1(b)(i)", "1(2)(1)", "1.b.i", "1.2.1"];
 
-export type Look = { font: string; size: number; color: string; bold: boolean; italic: boolean; underline: boolean; center: boolean; rule: boolean; before: number };
+export type Look = {
+  font: string; size: number; color: string; bold: boolean; italic: boolean; underline: boolean; center: boolean; rule: boolean;
+  before: number; after: number | null; line: number | null; spacing: number;
+};
 export type DocTheme = {
   name: string; paper: "a4" | "letter"; margin: number; margin_top: number;
-  font: string; size: number; line: number; gap: number;
+  font: string; size: number; line: number; gap: number; kern: boolean;
   title: Look; headings: [Look, Look, Look]; question: Look;
   code_font: string; code_size: number; code_box: "none" | "shade" | "border";
   shots: "small" | "medium" | "full"; shots_center: boolean;
   page_numbers: boolean; labels: boolean; show_question: boolean; prefix: string;
 };
-export const FONTS = ["Calibri", "Cambria", "Times New Roman", "Arial", "Georgia"];
+export const FONTS = ["Aptos", "Aptos Display", "Calibri", "Calibri Light", "Cambria", "Times New Roman", "Arial", "Georgia"];
 export const CODE_FONTS = ["Consolas", "Courier New"];
 
 export const fetchThemes = (): Promise<DocTheme[]> => fetch("/api/themes").then(r => r.json());

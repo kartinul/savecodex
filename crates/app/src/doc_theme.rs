@@ -17,6 +17,12 @@ pub struct Look {
     pub rule: bool,
     /// Space above, in points.
     pub before: f32,
+    /// Space below in points; None keeps the text's.
+    pub after: Option<f32>,
+    /// Line spacing multiple; None keeps the text's.
+    pub line: Option<f32>,
+    /// Extra space between letters in points, negative to tighten.
+    pub spacing: f32,
 }
 
 /// The whole look of a generated DOCX. Sizes are points, margins centimetres.
@@ -30,6 +36,8 @@ pub struct DocTheme {
     pub size: f32,
     pub line: f32,
     pub gap: f32,
+    /// Kerning and ligatures on all text, like Word 365's own defaults.
+    pub kern: bool,
     pub title: Look,
     pub headings: [Look; 3],
     pub question: Look,
@@ -65,6 +73,7 @@ impl Default for DocTheme {
             size: 10.0,
             line: 1.0,
             gap: 0.0,
+            kern: false,
             title: Look { size: 24.0, center: true, ..Default::default() },
             headings: [heading(13.0), heading(12.0), heading(11.0)],
             question: Look::default(),
@@ -145,6 +154,9 @@ impl DocTheme {
             if look.color.len() != 6 || !look.color.chars().all(|c| c.is_ascii_hexdigit()) { look.color.clear() }
             look.size = if look.size == 0.0 { 0.0 } else { look.size.clamp(6.0, 72.0) };
             look.before = look.before.clamp(0.0, 72.0);
+            look.after = look.after.map(|a| a.clamp(0.0, 72.0));
+            look.line = look.line.map(|l| l.clamp(0.8, 3.0));
+            look.spacing = look.spacing.clamp(-5.0, 10.0);
         }
         self
     }

@@ -50,7 +50,12 @@ fn pt(v: f32) -> u32 {
 }
 
 fn styled(id: &str, name: &str, look: &Look) -> Style {
-    let mut style = Style::new(id, StyleType::Paragraph).name(name).line_spacing(LineSpacing::new().before(pt(look.before)));
+    let mut spacing = LineSpacing::new();
+    if look.before > 0.0 { spacing = spacing.before(pt(look.before)) }
+    if let Some(after) = look.after { spacing = spacing.after(pt(after)) }
+    if let Some(line) = look.line { spacing = spacing.line_rule(LineSpacingType::Auto).line((line * 240.0).round() as i32) }
+    let mut style = Style::new(id, StyleType::Paragraph).name(name).line_spacing(spacing);
+    if look.spacing != 0.0 { style.run_property = style.run_property.spacing((look.spacing * 20.0).round() as i32) }
     if look.size > 0.0 { style = style.size((look.size * 2.0).round() as usize) }
     if !look.font.is_empty() { style = style.fonts(fonts(&look.font)) }
     if !look.color.is_empty() { style = style.color(&look.color) }
@@ -74,7 +79,7 @@ fn with_styles(docx: Docx, theme: &DocTheme) -> Docx {
         .add_style(styled("Title", "Title", &theme.title));
     for (level, look) in theme.headings.iter().enumerate() {
         let mut heading = styled(&format!("Heading{}", level + 1), &format!("heading {}", level + 1), look);
-        heading.paragraph_property = heading.paragraph_property.keep_next(true).outline_lvl(level);
+        heading.paragraph_property = heading.paragraph_property.keep_next(true).keep_lines(true).outline_lvl(level);
         docx = docx.add_style(heading);
     }
     let code_look = Look { font: theme.code_font.clone(), size: theme.code_size, ..Default::default() };
@@ -90,6 +95,29 @@ fn with_styles(docx: Docx, theme: &DocTheme) -> Docx {
         _ => code.paragraph_property,
     };
     docx.add_style(code).add_style(styled("Question", "Question", &theme.question))
+}
+
+/// docx-rs can't write kerning, ligatures or contextual spacing, so they go in by hand where Word 365
+/// has them: kern from 1pt and standard ligatures on all text, and a Title that ignores its own spacing.
+fn kerned(styles: &[u8]) -> Vec<u8> {
+    let mut xml = String::from_utf8_lossy(styles).into_owned();
+    let insert = |xml: &mut String, from: &str, before: &str, text: &str| {
+        if let Some(at) = xml.find(from).and_then(|s| xml[s..].find(before).map(|i| s + i)) { xml.insert_str(at, text) }
+    };
+    insert(&mut xml, "<w:rPrDefault>", "<w:sz ", r#"<w:kern w:val="2" />"#);
+    insert(&mut xml, "<w:rPrDefault>", "</w:rPr>", r#"<w14:ligatures w14:val="standardContextual" />"#);
+    insert(&mut xml, r#"w:styleId="Title""#, "</w:pPr>", "<w:contextualSpacing />");
+    xml.into_bytes()
+}
+
+/// docx-rs adds East Asian compatibility options and an 840 tab stop; Word's new documents have
+/// neither (tabs every half inch), and the options change how Latin text and line breaks lay out.
+fn word_settings(settings: &[u8]) -> Vec<u8> {
+    let mut xml = String::from_utf8_lossy(settings).replace(r#"<w:defaultTabStop w:val="840" />"#, r#"<w:defaultTabStop w:val="720" />"#);
+    for flag in ["spaceForUL", "balanceSingleByteDoubleByteWidth", "doNotLeaveBackslashAlone", "ulTrailSpace", "doNotExpandShiftReturn", "useFELayout"] {
+        xml = xml.replace(&format!("<w:{flag} />"), "");
+    }
+    xml.into_bytes()
 }
 
 fn heading(style: &str, text: &str) -> Paragraph {
@@ -111,7 +139,7 @@ pub fn generate_docx(
     tracing::debug!("generate_docx called for output: {:?}, title: {:?}, items count: {}", output, doc_title, items.len());
     let (paper_w, paper_h) = if theme.paper == "letter" { (12240, 15840) } else { (11906, 16838) };
     let side = cm(theme.margin);
-    let margin = PageMargin { top: cm(theme.margin_top), left: side, right: side, bottom: side, ..PageMargin::new() };
+    let margin = PageMargin { top: cm(theme.margin_top), left: side, right: side, bottom: side, header: 708, footer: 708, gutter: 0 };
     let mut docx = with_styles(Docx::new(), theme).page_size(paper_w, paper_h).page_margin(margin);
     if theme.page_numbers {
         docx = docx.footer(Footer::new().add_paragraph(Paragraph::new().align(AlignmentType::Center).add_page_num(PageNum::new())));
@@ -196,7 +224,10 @@ pub fn generate_docx(
     tracing::debug!("Creating DOCX file at {:?}", output);
     let docx_file = std::fs::File::create(output).context("Failed to create DOCX")?;
     tracing::debug!("Packing DOCX file...");
-    docx.build().pack(docx_file).context("Failed to pack DOCX")?;
+    let mut xml = docx.build();
+    if theme.kern { xml.styles = kerned(&xml.styles) }
+    xml.settings = word_settings(&xml.settings);
+    xml.pack(docx_file).context("Failed to pack DOCX")?;
     tracing::debug!("Successfully packed DOCX file");
     
     Ok(())
@@ -222,5 +253,34 @@ mod tests {
             assert_eq!(headings, ["1", "(a)", "(i)", "(ii)", "(b)", "(i)", "2"], "{}", theme.name);
             assert_eq!(xml.matches("w:type=\"page\"").count(), 1, "one break, before question 2");
         }
+    }
+
+    /// The word preset against a blank Word 365 document (Title and Heading styles as Word itself writes
+    /// them, measured stock defaults), checked with a style resolver at 67/67; this keeps it that way.
+    #[test]
+    fn word_preset_matches_word_365() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("w.docx");
+        generate_docx(&out, "T", None, &[], false, &DocTheme::load("word").unwrap()).unwrap();
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
+        let mut read = |name: &str| { let mut s = String::new(); zip.by_name(name).unwrap().read_to_string(&mut s).unwrap(); s };
+        let (styles, settings, document) = (read("word/styles.xml"), read("word/settings.xml"), read("word/document.xml"));
+        let style = |id: &str| styles.split(&format!("w:styleId=\"{id}\"")).nth(1).unwrap().split("</w:style>").next().unwrap().to_string();
+        let defaults = styles.split("<w:docDefaults>").nth(1).unwrap().split("</w:docDefaults>").next().unwrap();
+        for want in [r#"<w:kern w:val="2" />"#, r#"<w:sz w:val="24" />"#, r#"w:ascii="Aptos""#, "standardContextual", r#"w:after="160" w:line="278" w:lineRule="auto""#] {
+            assert!(defaults.contains(want), "docDefaults lacks {want}");
+        }
+        let title = style("Title");
+        for want in [r#"<w:sz w:val="56" />"#, r#"w:ascii="Aptos Display""#, r#"<w:spacing w:val="-10" />"#, r#"w:after="80" w:line="240""#, "<w:contextualSpacing />"] {
+            assert!(title.contains(want), "Title lacks {want}");
+        }
+        for (id, sz, before, font) in [("Heading1", 40, 360, true), ("Heading2", 32, 160, true), ("Heading3", 28, 160, false)] {
+            let h = style(id);
+            assert!(h.contains(&format!(r#"<w:sz w:val="{sz}" />"#)) && h.contains(r#"<w:color w:val="0F4761" />"#), "{id} size/colour");
+            assert!(h.contains(&format!(r#"w:before="{before}" w:after="80""#)) && h.contains("<w:keepNext />") && h.contains("<w:keepLines />"), "{id} spacing");
+            assert_eq!(h.contains("Aptos Display"), font, "{id} font");
+        }
+        assert!(document.contains(r#"w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708""#));
+        assert!(settings.contains(r#"w:val="720""#) && !settings.contains("useFELayout") && settings.contains(r#"compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15""#));
     }
 }
