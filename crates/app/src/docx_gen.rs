@@ -14,6 +14,8 @@ pub struct PackItem {
     pub answer_after: String,
     /// Empty when there is nothing to show (written-only answers).
     pub shots: Vec<Shot>,
+    /// Continues the previous item's question, so it never starts a new page.
+    pub same_question: bool,
 }
 
 pub struct Shot {
@@ -75,7 +77,7 @@ pub fn generate_docx(
             .unwrap_or(&item.filename);
 
         if index > 0 {
-            if page_break {
+            if page_break && !item.same_question {
                 docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_break(BreakType::Page)));
             } else {
                 // Add a blank line (empty paragraph) between items if no page break is used

@@ -12,8 +12,9 @@ pub fn input_generation_prompt(files: &[(&str, &str)]) -> String {
 }
 
 /// `solve` step 1: turn a document of tasks (text + page images) into grouped questions.
-pub fn extract_prompt(doc_text: &str, langs: &str, session_langs: &str) -> String {
-    format!(r#"You are reading a document that asks for things to be made, written or answered (questions, exercises, project briefs, specs, tickets). Its text is below and a photo of every page is attached; use the photos for anything the text misses (tables, figures, scanned pages).
+pub fn extract_prompt(doc_text: &str, langs: &str, session_langs: &str, photos: bool) -> String {
+    let photos = if photos { " and a photo of every page is attached; use the photos for anything the text misses (tables, figures, scanned pages)" } else { "" };
+    format!(r#"You are reading a document that asks for things to be made, written or answered (questions, exercises, project briefs, specs, tickets). Its text is below{photos}.
 
 Return ONLY this JSON, no markdown:
 {{"language":"<language or empty>","groups":[{{"setup":{{"lang":"<language>","code":"<code>"}},"questions":[{{"title":"<title>","text":"<full question>","parts":["<part>"]}}]}}]}}

@@ -198,8 +198,9 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     configs.retain(|_, c| c.installed());
 
     println!("{tag}🔍 Extracting questions with {} ({} image(s))…", crate::ai::describe(Tier::Smart), read.images.len() / 2);
-    let mut parts = vec![Part::Text(extract_prompt(&read.text, &lang_names(&configs, |c| !c.image), &lang_names(&configs, |c| c.session)))];
-    parts.extend(read.images);
+    let photos = crate::ai::sees_images(Tier::Smart);
+    let mut parts = vec![Part::Text(extract_prompt(&read.text, &lang_names(&configs, |c| !c.image), &lang_names(&configs, |c| c.session), photos))];
+    if photos { parts.extend(read.images) }
     let permit = opts.sem.acquire().await.expect("semaphore closed");
     let mut extracted: Extracted = ask_json(Tier::Smart, &parts).await.context("extracting questions")?;
     drop(permit);
@@ -276,8 +277,8 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
 
     let mut items = Vec::new();
     let (mut done, mut failed, mut no_shot) = (0, Vec::new(), Vec::new());
-    let mut last_label: Option<String> = None;
-    for (mut item, status, label, _) in results {
+    let (mut last_label, mut last_question): (Option<String>, Option<String>) = (None, None);
+    for (mut item, status, label, question) in results {
         match status {
             Status::Done => done += 1,
             Status::NoScreenshot => no_shot.push(label),
@@ -290,6 +291,8 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
         } else {
             last_label = item.heading.clone();
         }
+        item.same_question = last_question.as_ref() == Some(&question);
+        last_question = Some(question);
         items.push(item);
     }
 

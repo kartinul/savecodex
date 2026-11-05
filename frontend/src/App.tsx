@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { DEFAULTS, clearJob, docUrl, followJob, previewUrl, startJob, type JobEvent, type Mode, type Settings, type Upload } from "./api";
 import { DocPreview, Groups, Idle, type Doc } from "./Live";
 import { SettingsView, Toml } from "./Settings";
-import { Ticker } from "./Ticker";
 
 type Phase = "idle" | "running" | "done";
 
@@ -68,6 +67,12 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null), folderInput = useRef<HTMLInputElement>(null);
   const stopFollowing = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!job || phase !== "running") return;
+    const leave = () => clearJob(job);
+    addEventListener("pagehide", leave);
+    return () => removeEventListener("pagehide", leave);
+  }, [job, phase]);
   const mode = view.mode, files = uploads[mode];
   const set = (patch: Partial<Settings>) => setSettings({ ...settings, ...patch });
   const preview = useDebounced(previewUrl(settings), 200);
@@ -140,13 +145,11 @@ export default function App() {
   const tiles = docs.flatMap(d => d.tiles ?? []);
   const ready = tiles.filter(t => t.state === "ok" || t.state === "failed").length;
   const found = docs.length > 0 && docs.every(d => d.tiles || d.error);
-  const progress = !found ? <Ticker step="reading" since={docs[0]?.since ?? Date.now()} />
-    : ready < tiles.length ? `${ready} of ${tiles.length} ${mode === "solve" ? "answers" : "files"} ready`
-    : <Ticker step="packing" since={Math.max(...tiles.map(t => t.since))} />;
+  const progress = !found ? "reading your files" : ready < tiles.length ? `${ready} of ${tiles.length} ${mode === "solve" ? "answers" : "files"} ready` : "putting your documents together";
   const pct = found && tiles.length ? ready / tiles.length : 0;
   const cells = Math.round(pct * 24);
   const finished = docs.filter(d => d.file);
-  const name = files[0] ? stem(files[0].path.split("/")[0]) : mode === "solve" ? "assignment" : "code";
+  const name = files[0] ? stem(files[0].path.split("/")[0]) : mode === "solve" ? "document" : "code";
   const noun = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 
   return (
@@ -170,7 +173,7 @@ export default function App() {
         {cfg && phase === "idle" ? (
           <SettingsView mode={mode} s={settings} set={set} apiKey={apiKey} setApiKey={setApiKey} onBack={() => setCfg(false)} />
         ) : <>
-          <h1 className="title">{mode === "solve" ? "solve an assignment" : "pack your code"}</h1>
+          <h1 className="title">{mode === "solve" ? "solve a document" : "pack your code"}</h1>
           {phase === "idle" && <>
             <div className={`tray${over ? " over" : ""}`}
               onDragOver={e => { e.preventDefault(); setOver(true) }} onDragLeave={() => setOver(false)}

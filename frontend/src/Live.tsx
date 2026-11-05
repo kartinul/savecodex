@@ -61,7 +61,7 @@ function TileView({ tile, n, job, mode, onOpen }: { tile: Tile; n: number; job: 
   );
 }
 
-const Ghost = ({ since }: { since: number }) => <div className="tile ghost"><div className="tile-title"><Ticker step="reading" since={since} /></div><div className="tile-body" /><div className="tile-note" /></div>;
+const Ghost = ({ since }: { since: number }) => <div className="tile ghost"><div className="tile-title">finding the tasks</div><div className="tile-body"><Ticker step="reading" since={since} /></div><div className="tile-note" /></div>;
 
 export function Groups({ docs, job, mode, onDownload }: { docs: Doc[]; job: string; mode: Mode; onDownload: (d: Doc) => void }) {
   const [open, setOpen] = useState<{ doc: string; id: string } | null>(null);
@@ -107,7 +107,7 @@ export function Groups({ docs, job, mode, onDownload }: { docs: Doc[]; job: stri
 
 export function Idle({ mode, preview }: { mode: Mode; preview: string }) {
   const steps = mode === "solve"
-    ? [["read ", "finds every question in your files"], ["write", "writes an answer for each one"], ["run  ", "runs it and takes a real terminal screenshot"], ["pack ", "puts code and screenshots into a word document"]]
+    ? [["read ", "finds every task in your files"], ["write", "writes an answer for each one"], ["run  ", "runs it and takes a real terminal screenshot"], ["pack ", "puts code and screenshots into a word document"]]
     : [["input", "makes up input for programs that ask for it"], ["run  ", "runs every file and takes a real terminal screenshot"], ["pack ", "puts code and screenshots into a word document"]];
   return (
     <section className="idle">

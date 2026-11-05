@@ -21,7 +21,7 @@ export type Settings = {
 
 export const DEFAULTS: Settings = {
   style: "windows", theme: "dark", username: "user", hostname: "laptop", cwd: "lab", messy: 0, min_cols: 80, seed: 1,
-  doc_title: "", doc_text: "", output: "", page_break: true, check: false, instructions: "", base_url: "", model: "",
+  doc_title: "", doc_text: "", output: "", page_break: false, check: false, instructions: "", base_url: "", model: "",
 };
 
 export type Upload = { file: File; path: string };
@@ -48,7 +48,7 @@ const shotFields = (s: Settings) => ({
 export const previewUrl = (s: Settings) => `/api/preview?${new URLSearchParams({ ...shotFields(s), seed: String(s.seed) })}`;
 export const shotUrl = (job: string, n: number) => `/api/jobs/${job}/shot/${n}`;
 export const docUrl = (job: string, n: number) => `/api/jobs/${job}/doc/${n}`;
-export const clearJob = (job: string) => fetch(`/api/jobs/${job}`, { method: "DELETE" }).catch(() => {});
+export const clearJob = (job: string) => fetch(`/api/jobs/${job}`, { method: "DELETE", keepalive: true }).catch(() => {});
 
 export async function startJob(mode: Mode, uploads: Upload[], s: Settings, apiKey: string): Promise<string> {
   const body = new FormData();

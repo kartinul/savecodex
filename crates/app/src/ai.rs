@@ -75,7 +75,8 @@ const AGENTS: &[Agent] = &[
     Agent { name: "copilot", bin: "copilot", models: ["", "", ""] },
     Agent { name: "qwen", bin: "qwen", models: ["", "", ""] },
     Agent { name: "amp", bin: "amp", models: ["", "", ""] },
-    Agent { name: "antigravity", bin: "agy", models: ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"] },
+    // picked from `agy models` at first use, see `antigravity_models`
+    Agent { name: "antigravity", bin: "agy", models: ["", "", ""] },
 ];
 
 const GEMINI_MODELS: [&str; 3] = [
@@ -112,6 +113,9 @@ pub struct AiConfig {
 
 static OVERRIDES: OnceLock<HashMap<String, String>> = OnceLock::new();
 static DEAD_AGENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+/// Agent models that ran out of quota, skipped for the rest of the run.
+static DEAD_MODELS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static AGY_MODELS: tokio::sync::OnceCell<Vec<String>> = tokio::sync::OnceCell::const_new();
 /// How often each model actually answered, since a routing gateway (`auto`) picks one per request.
 static ANSWERED_BY: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
 static AGENT_SLOTS: OnceLock<Vec<Arc<Semaphore>>> = OnceLock::new();
@@ -196,7 +200,7 @@ impl AiConfig {
             Provider::Gemini => gemini(self, parts, json_only).await,
             Provider::OpenAi => openai(self, parts).await,
             Provider::Ollama => ollama(self, parts).await,
-            Provider::Agent(agent, bin) => run_agent(agent, bin, &self.model, self.effort(), parts).await,
+            Provider::Agent(agent, bin) => run_agent(agent, bin, &self.model, self.tier, self.effort(), parts).await,
         }
     }
 }
@@ -269,6 +273,12 @@ fn resolve_with(tier: Tier, var: &dyn Fn(&str) -> Option<String>, find_bin: &dyn
 
 fn is_dead(config: &AiConfig) -> bool {
     matches!(&config.provider, Provider::Agent(a, _) if DEAD_AGENTS.lock().unwrap().contains(&a.name))
+}
+
+/// Whether `tier` gets page images. Antigravity's headless mode is denied the tool it opens files with,
+/// and then answers with that error instead, even when images are only mentioned.
+pub fn sees_images(tier: Tier) -> bool {
+    resolve(tier).ok().and_then(|c| c.into_iter().find(|c| !is_dead(c))).is_none_or(|c| !matches!(&c.provider, Provider::Agent(a, _) if a.name == "antigravity"))
 }
 
 /// Which AI `tier` would use, for logs.
@@ -484,7 +494,71 @@ fn backoff(attempt: usize) -> Duration {
 
 /// Run an agent CLI with starts spaced out, and at most `SAVECODEX_AGENT_JOBS` per agent at once if set
 /// (otherwise only `-j` limits it). Burst errors ("temporarily limiting", overloaded) are retried.
-async fn run_agent(agent: &'static Agent, bin: &Path, model: &str, effort: Option<&str>, parts: &[Part]) -> Result<String> {
+/// Every model `agy models` lists for this account, asked once per run.
+async fn agy_models(bin: &Path) -> &'static [String] {
+    AGY_MODELS.get_or_init(|| async {
+        let out = tokio::time::timeout(Duration::from_secs(30), tokio::process::Command::new(bin).arg("models").output()).await;
+        let listed: Vec<String> = match out {
+            Ok(Ok(o)) => String::from_utf8_lossy(&o.stdout).lines()
+                .filter_map(|l| l.split('\t').next()).map(str::trim)
+                .filter(|m| !m.is_empty() && !m.contains(' ')).map(String::from).collect(),
+            _ => Vec::new(),
+        };
+        tracing::info!("antigravity models: {}", if listed.is_empty() { "none listed, using agy's default".into() } else { listed.join(", ") });
+        listed
+    }).await
+}
+
+/// `tier`'s models in the order to try them, by kind rather than exact name so new versions are picked up:
+/// within a kind the highest version comes first, and later kinds are the fallbacks when one runs out of quota.
+fn antigravity_models(available: &[String], tier: Tier) -> Vec<String> {
+    let kinds: &[&str] = match tier {
+        Tier::Smart => &["pro", "flash-high", "opus", "sonnet"],
+        Tier::Mid => &["flash-medium", "flash-high", "sonnet", "gpt-oss"],
+        Tier::Fast => &["flash-low", "flash-medium", "gpt-oss", "sonnet"],
+    };
+    let version = |m: &str| m.split(['-', '_']).find_map(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
+    let mut picked = Vec::new();
+    for kind in kinds {
+        let mut matching: Vec<&String> = available.iter().filter(|m| m.contains(kind) && !picked.contains(*m)).collect();
+        matching.sort_by(|a, b| version(b).total_cmp(&version(a)));
+        picked.extend(matching.into_iter().cloned());
+    }
+    picked
+}
+
+fn is_out_of_quota(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    ["quota", "resource_exhausted", "resource exhausted", "weekly limit", "usage limit", "limit reached", "exceeded your"].iter().any(|p| lower.contains(p))
+}
+
+/// Run an agent, trying each of its models in turn when one is out of quota (a comma-separated model or
+/// antigravity's picked list); empty means the CLI's own default.
+async fn run_agent(agent: &'static Agent, bin: &Path, model: &str, tier: Tier, effort: Option<&str>, parts: &[Part]) -> Result<String> {
+    let mut models: Vec<String> = if agent.name == "antigravity" && model.is_empty() {
+        antigravity_models(agy_models(bin).await, tier)
+    } else {
+        model.split(',').map(|m| m.trim().to_string()).collect()
+    };
+    if models.is_empty() { models.push(String::new()) }
+    let mut last_err = None;
+    for m in models.iter().filter(|m| !DEAD_MODELS.lock().unwrap().contains(m)) {
+        // agy can print a quota error as its normal reply
+        let result = run_agent_model(agent, bin, m, effort, parts).await
+            .and_then(|text| if text.len() < 400 && is_out_of_quota(&text) { Err(anyhow!(text)) } else { Ok(text) });
+        match result {
+            Err(e) if is_out_of_quota(&format!("{e:#}")) => {
+                tracing::warn!("{} {m} is out of quota, trying the next model: {e:#}", agent.name);
+                DEAD_MODELS.lock().unwrap().push(m.clone());
+                last_err = Some(e);
+            }
+            result => return result,
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("{} is out of quota on every model ({})", agent.name, models.join(", "))))
+}
+
+async fn run_agent_model(agent: &'static Agent, bin: &Path, model: &str, effort: Option<&str>, parts: &[Part]) -> Result<String> {
     let slots = AGENT_SLOTS.get_or_init(|| {
         let jobs = var("SAVECODEX_AGENT_JOBS").and_then(|j| j.parse().ok()).unwrap_or(Semaphore::MAX_PERMITS).max(1);
         AGENTS.iter().map(|_| Arc::new(Semaphore::new(jobs))).collect()
@@ -517,11 +591,16 @@ fn is_burst_limit(text: &str) -> bool {
 /// Run an agent CLI once in an empty temp dir. Images are saved there and referenced by path.
 async fn run_agent_once(agent: &Agent, bin: &Path, model: &str, effort: Option<&str>, parts: &[Part]) -> Result<String> {
     let dir = tempfile::tempdir()?;
-    let mut prompt = String::new();
+    // antigravity otherwise works it as an agent task, many slow tool turns for one answer
+    let mut prompt = if agent.name == "antigravity" {
+        "Reply once, straight away, from this message alone. Do not use any tools, run commands, open files, \
+        search, or plan in steps: everything you need is below.\n\n".to_string()
+    } else { String::new() };
     let mut images = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         match part {
             Part::Text(t) => prompt.push_str(t),
+            Part::Image(..) if agent.name == "antigravity" => continue,
             Part::Image(mime, bytes) => {
                 let path = dir.path().join(format!("image{i}.{}", mime.rsplit('/').next().unwrap_or("png")));
                 std::fs::write(&path, bytes)?;
@@ -574,6 +653,8 @@ async fn run_agent_once(agent: &Agent, bin: &Path, model: &str, effort: Option<&
             arg("-p"); arg(&prompt);
         }
         "antigravity" => {
+            // headless mode denies every tool and then gives no answer, so it may run them, sandboxed in the empty temp dir
+            for a in ["--dangerously-skip-permissions", "--sandbox"] { arg(a) }
             if !model.is_empty() { arg("--model"); arg(model) }
             if let Some(e) = effort { arg("--effort"); arg(if e == "off" { "low" } else { e }) }
             // -p takes the next arg as its prompt, so it goes last

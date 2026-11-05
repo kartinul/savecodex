@@ -10,7 +10,7 @@ export const TIP = {
   messy: "makes screenshots look taken by hand: uneven crop, a scrollbar, an unfocused window; the dice shows another sample",
   cols: "how wide the terminal window is at least, in characters",
   title: "the big heading at the top of the document; empty uses the file name, {} is the file name",
-  text: "written under the title, like your name and roll number; {} is the file name",
+  text: "written under the title, like your name or a short note; {} is the file name",
   file: "the name of the word file you download; {} is the uploaded file name",
   pages: "start each answer on a new page",
   rules: "your own rules the ai follows before anything else, like \"use java\" or \"comment every line\"",
@@ -97,7 +97,7 @@ export function SettingsView({ mode, s, set, apiKey, setApiKey, onBack }: { mode
       <div className="rows">
         <Text label="title" tip={TIP.title} value={s.doc_title} ph="same as the upload" onChange={doc_title => set({ doc_title })} />
         <label className="row stack"><span>text under the title<Tip t={TIP.text} /></span>
-          <textarea className="ri" rows={2} value={s.doc_text} placeholder="name, roll number, anything else" onChange={e => set({ doc_text: e.target.value })} />
+          <textarea className="ri" rows={2} value={s.doc_text} placeholder="your name, a date, anything else" onChange={e => set({ doc_text: e.target.value })} />
         </label>
         <Text label="file name" tip={TIP.file} value={s.output} ph={mode === "solve" ? "{}_solved" : "{}_pack"} onChange={output => set({ output })} />
         <Switch label={mode === "solve" ? "new page per question" : "new page per file"} tip={TIP.pages} checked={s.page_break} onChange={page_break => set({ page_break })} />
