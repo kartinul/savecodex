@@ -291,8 +291,14 @@ async fn clear(UrlPath(id): UrlPath<String>) -> StatusCode {
 /// GET /api/preview — a sample screenshot with the given look.
 async fn preview(Query(q): Query<Fields>) -> Response {
     let opts = term_options(&q);
+    // the document preview shows each sample program's own run
+    let text = match field(&q, "sample") {
+        Some("fib") => "$ python3 fib.py\n55\n",
+        Some("hello") => "$ python3 hello.py\nhello, world\n",
+        _ => PREVIEW,
+    };
     let png = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
-        let img = crate::term_gen::generate_terminal_image(PREVIEW, &opts)?;
+        let img = crate::term_gen::generate_terminal_image(text, &opts)?;
         let mut buf = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buf, image::ImageOutputFormat::Png)?;
         Ok(buf.into_inner())

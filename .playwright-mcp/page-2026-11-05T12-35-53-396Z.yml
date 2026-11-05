@@ -1,0 +1,142 @@
+- generic [ref=e3]:
+  - main [ref=e4]:
+    - generic [ref=e5]: $_ savecodex
+    - region "Document preview" [ref=e65]:
+      - paragraph [ref=e66]: "# how document_solved.docx will look"
+      - article [ref=e67]:
+        - generic [ref=e68]:
+          - heading "document" [level=1] [ref=e69]
+          - heading "1" [level=2] [ref=e70]
+          - heading "(a)" [level=3] [ref=e71]
+          - generic [ref=e72]: "#include <stdio.h> int main() { int n, f = 1; printf(\"Enter a number: \"); scanf(\"%d\", &n); for (int i = 2; i <= n; i++) f *= i; printf(\"Factorial of %d is %d\\n\", n, f); }"
+          - paragraph [ref=e73]
+          - paragraph [ref=e74]
+          - heading "(b)" [level=3] [ref=e75]
+          - heading "(i)" [level=4] [ref=e76]
+          - paragraph [ref=e77]: An array keeps its elements next to each other in memory, so any element can be read straight from its index. Inserting in the middle means moving every element after it.
+          - paragraph [ref=e78]
+          - heading "(ii)" [level=4] [ref=e79]
+          - paragraph [ref=e80]: A linked list stores each element with a pointer to the next one, so inserting only changes two pointers, but reaching the n-th element means walking n steps.
+          - paragraph [ref=e81]
+          - heading "2" [level=2] [ref=e82]
+          - paragraph [ref=e83]: A stack adds and removes elements from the same end, so the last one in is the first one out. Function calls, undo history and bracket matching all use one.
+          - paragraph [ref=e84]
+          - heading "3" [level=2] [ref=e85]
+          - generic [ref=e86]: "def fib(n): a, b = 0, 1 for _ in range(n): a, b = b, a + b return a print(fib(10))"
+          - paragraph [ref=e87]
+  - complementary "Panel" [ref=e20]:
+    - generic [ref=e21]:
+      - group "Mode" [ref=e22]:
+        - button "solve" [pressed] [ref=e23] [cursor=pointer]
+        - button "pack" [ref=e24] [cursor=pointer]
+      - button "Hide panel" [ref=e25] [cursor=pointer]: »
+    - generic [ref=e88]:
+      - generic [ref=e89]:
+        - heading "settings" [level=1] [ref=e90]
+        - generic [ref=e91]:
+          - button "Reset all settings and delete saved themes" [ref=e92] [cursor=pointer]
+          - button "back" [ref=e95] [cursor=pointer]
+      - heading "# terminal" [level=2] [ref=e96]
+      - generic [ref=e97]:
+        - generic [ref=e98]:
+          - generic [ref=e99]:
+            - text: window
+            - note "which computer the terminal screenshots look like they came from" [ref=e100]: "?"
+          - generic [ref=e101]:
+            - button "windows" [pressed] [ref=e102] [cursor=pointer]
+            - button "mac" [ref=e103] [cursor=pointer]
+            - button "ubuntu" [ref=e104] [cursor=pointer]
+        - generic [ref=e105]:
+          - generic [ref=e106]:
+            - text: colors
+            - note "dark or light terminal in the screenshots" [ref=e107]: "?"
+          - generic [ref=e108]:
+            - button "dark" [pressed] [ref=e109] [cursor=pointer]
+            - button "light" [ref=e110] [cursor=pointer]
+        - generic [ref=e111]:
+          - generic [ref=e112]:
+            - text: username
+            - note "your name in the terminal line, like user@laptop" [ref=e113]: "?"
+          - textbox "usernameyour name in the terminal line, like user@laptop" [ref=e114]: user
+        - generic [ref=e115]:
+          - generic [ref=e116]:
+            - text: hostname
+            - note "the computer name after the @ in the terminal line" [ref=e117]: "?"
+          - textbox "hostnamethe computer name after the @ in the terminal line" [ref=e118]: laptop
+        - generic [ref=e119]:
+          - generic [ref=e120]:
+            - text: dir
+            - 'note "the folder the terminal shows your code running in; {} is the file name" [ref=e121]': "?"
+          - 'textbox "dirthe folder the terminal shows your code running in; {} is the file name" [ref=e122]': lab
+        - generic [ref=e123]:
+          - generic [ref=e124]:
+            - text: messy
+            - 'note "makes screenshots look taken by hand: uneven crop, a scrollbar, an unfocused window; the dice shows another sample" [ref=e125]': "?"
+          - generic [ref=e126]:
+            - slider "messy" [ref=e127]: "3"
+            - generic [ref=e128]: "3"
+            - button "another sample" [ref=e129] [cursor=pointer]: ⚄
+        - generic [ref=e130]:
+          - generic [ref=e131]:
+            - text: min width
+            - note "how wide the terminal window is at least, in characters" [ref=e132]: "?"
+          - spinbutton "min widthhow wide the terminal window is at least, in characters" [ref=e133]: "80"
+      - heading "# document" [level=2] [ref=e134]
+      - generic [ref=e135]:
+        - generic [ref=e136]:
+          - generic [ref=e137]:
+            - text: theme
+            - 'note "how the word file looks: fonts, headings, code boxes; edit makes your own" [ref=e138]': "?"
+          - generic [ref=e139]:
+            - button "theme" [ref=e141] [cursor=pointer]: word 2010 ▾
+            - button "edit" [ref=e142] [cursor=pointer]
+        - generic [ref=e143]:
+          - generic [ref=e144]:
+            - text: title
+            - 'note "the big heading at the top of the document; empty uses the file name, {} is the file name" [ref=e145]': "?"
+          - 'textbox "titlethe big heading at the top of the document; empty uses the file name, {} is the file name" [ref=e146]':
+            - /placeholder: same as the upload
+        - generic [ref=e147]:
+          - generic [ref=e148]:
+            - text: text under the title
+            - 'note "written under the title, like your name or a short note; {} is the file name" [ref=e149]': "?"
+          - 'textbox "text under the titlewritten under the title, like your name or a short note; {} is the file name" [ref=e150]':
+            - /placeholder: your name, a date, anything else
+        - generic [ref=e151]:
+          - generic [ref=e152]:
+            - text: file name
+            - 'note "the name of the word file you download; {} is the uploaded file name" [ref=e153]': "?"
+          - 'textbox "file namethe name of the word file you download; {} is the uploaded file name" [ref=e154]':
+            - /placeholder: "{}_solved"
+        - generic [ref=e155]:
+          - generic [ref=e156]:
+            - text: new page per question
+            - note "start each answer on a new page" [ref=e157]: "?"
+          - checkbox "new page per questionstart each answer on a new page" [ref=e158] [cursor=pointer]
+        - generic [ref=e159]:
+          - generic [ref=e160]:
+            - text: numbering
+            - note "how sub-parts are numbered in their headings" [ref=e161]: "?"
+          - button "numbering" [ref=e163] [cursor=pointer]: 1(b)(i) ▾
+        - generic [ref=e164]:
+          - generic [ref=e165]:
+            - text: parts
+            - note "short heads a sub-part with only its own number, under its question's heading; full repeats the whole label" [ref=e166]: "?"
+          - generic [ref=e167]:
+            - button "(i)" [pressed] [ref=e168] [cursor=pointer]
+            - button "1(b)(i)" [ref=e169] [cursor=pointer]
+      - heading "# answers" [level=2] [ref=e170]
+      - generic [ref=e171]:
+        - generic [ref=e172]:
+          - generic [ref=e173]:
+            - text: ai instructions
+            - note "your own rules the ai follows before anything else, like \"use java\" or \"comment every line\"" [ref=e174]: "?"
+          - textbox "ai instructionsyour own rules the ai follows before anything else, like \"use java\" or \"comment every line\"" [ref=e175]:
+            - /placeholder: use java, keep answers short, comment the code…
+        - generic [ref=e176]:
+          - generic [ref=e177]:
+            - text: double-check answers
+            - note "the ai grades every answer and redoes the wrong ones; takes longer" [ref=e178]: "?"
+          - checkbox "double-check answersthe ai grades every answer and redoes the wrong ones; takes longer" [ref=e179] [cursor=pointer]
+      - group [ref=e180]:
+        - generic "# own api key [+]" [ref=e181] [cursor=pointer]

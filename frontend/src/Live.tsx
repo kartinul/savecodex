@@ -17,6 +17,29 @@ int main() {
     printf("Factorial of %d is %d\\n", n, f);
 }`;
 
+const FIB = `def fib(n):
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a
+
+print(fib(10))`;
+
+/** A small ER diagram like the ones `dot` draws for diagram answers. */
+const ER = (
+  <svg viewBox="0 0 420 150" style={{ width: "70%", display: "inline-block", verticalAlign: "bottom" }} fontFamily="'Times New Roman', Tinos, serif" fontSize="13" textAnchor="middle" stroke="#000" fill="none" aria-label="Sample ER diagram">
+    <rect x="20" y="62" width="90" height="34" /><text x="65" y="84" stroke="none" fill="#000">Student</text>
+    <polygon points="210,52 262,79 210,106 158,79" /><text x="210" y="83" stroke="none" fill="#000">enrolls</text>
+    <rect x="310" y="62" width="90" height="34" /><text x="355" y="84" stroke="none" fill="#000">Course</text>
+    <path d="M110 79H158M262 79H310M45 62L35 34M85 62L95 34M335 62L325 34M375 62L385 34" />
+    <text x="133" y="73" stroke="none" fill="#000" fontSize="11">M</text><text x="287" y="73" stroke="none" fill="#000" fontSize="11">N</text>
+    <ellipse cx="32" cy="22" rx="28" ry="12" /><text x="32" y="26" stroke="none" fill="#000" fontSize="11" textDecoration="underline">roll</text>
+    <ellipse cx="98" cy="22" rx="28" ry="12" /><text x="98" y="26" stroke="none" fill="#000" fontSize="11">name</text>
+    <ellipse cx="322" cy="22" rx="28" ry="12" /><text x="322" y="26" stroke="none" fill="#000" fontSize="11" textDecoration="underline">code</text>
+    <ellipse cx="388" cy="22" rx="28" ry="12" /><text x="388" y="26" stroke="none" fill="#000" fontSize="11">title</text>
+  </svg>
+);
+
 /** Reveals new code a few characters at a time, since answers arrive whole. */
 function useTyped(text: string) {
   const [n, setN] = useState(0);
@@ -169,33 +192,44 @@ export function DocPreview({ mode, s, t, name, preview }: { mode: Mode; s: Setti
     {t.labels && <p style={{ fontWeight: 700 }}>Code:</p>}
     <pre style={{ fontFamily: family(t.code_font || t.font), fontSize: `${t.code_size * PT}cqw`, background: t.code_box === "shade" ? "#F2F2F2" : undefined, border: t.code_box === "border" ? "1px solid #808080" : undefined, padding: box ? "1cqw" : undefined }}>{text}</pre>
   </>;
-  const shot = <>
+  // like the docx: a line break above each screenshot, and empty paragraphs between items
+  const shot = (sample = "") => <>
     {t.labels && <p style={{ fontWeight: 700 }}>Output:</p>}
-    <img src={preview} alt="" style={{ width: { small: "50%", medium: "75%", full: "100%" }[t.shots], margin: t.shots_center ? "0 auto" : undefined }} />
+    <p style={{ textAlign: t.shots_center ? "center" : undefined }}><br /><img src={sample ? `${preview}&sample=${sample}` : preview} alt="" style={{ display: "inline-block", verticalAlign: "bottom", width: { small: "50%", medium: "75%", full: "100%" }[t.shots] }} /></p>
   </>;
+  const blank = <p>{"\u00a0"}</p>;
   const first = mode === "solve" ? <>
     {h(1, `${t.prefix}1`)}
     {h(2, part([1]))}
     {t.show_question && <p style={looks(t.question)}>Write a program that reads a number and prints its factorial.</p>}
     {code(SAMPLE)}
-    {shot}
+    {shot()}
+    {blank}
     {h(2, part([2]))}
     {h(3, part([2, 1]))}
-    <p>An array keeps its elements next to each other in memory, so any element can be read straight from its index.</p>
-  </> : <>{h(1, "1. fact")}{code(SAMPLE)}{shot}</>;
-  const second = mode === "solve"
-    ? <>{h(1, `${t.prefix}2`)}<p>A stack adds and removes elements from the same end, so the last one in is the first one out.</p></>
-    : <>{h(1, "2. fib")}{code(SAMPLE.split("\n").slice(0, 4).join("\n"))}</>;
+    <p>An array keeps its elements next to each other in memory, so any element can be read straight from its index. Inserting in the middle means moving every element after it.</p>
+    {blank}
+    {h(3, part([2, 2]))}
+    <p>A linked list stores each element with a pointer to the next one, so inserting only changes two pointers, but reaching the n-th element means walking n steps.</p>
+  </> : <>{h(1, "1. fact")}{code(SAMPLE)}{shot()}</>;
+  const second = mode === "solve" ? <>
+    {h(1, `${t.prefix}2`)}
+    {h(2, part([1]))}
+    {code(FIB)}
+    {shot("fib")}
+    {blank}
+    {h(2, part([2]))}
+    <p style={{ textAlign: t.shots_center ? "center" : undefined }}><br />{ER}</p>
+  </> : <>{h(1, "2. fib")}{code(FIB)}{shot("fib")}{blank}{h(1, "3. hello")}{code(`print("hello, world")`)}{shot("hello")}</>;
   const number = (n: number) => t.page_numbers && <span className="page-num" style={{ bottom: cm(1.2) }}>{n}</span>;
   return (
     <section className="pages" aria-label="Document preview">
       <p># how {fill(s.output || (mode === "solve" ? "{}_solved" : "{}_pack"))}.docx will look</p>
       <article className="page" style={page}><div className="sheet" style={sheet}>
         <h1 style={looks(t.title)}>{fill(s.doc_title) || name}</h1>
-        {s.doc_text && <pre>{fill(s.doc_text)}</pre>}
-        <div className="gap" />
+        {s.doc_text && <><pre>{fill(s.doc_text)}</pre>{blank}</>}
         {first}
-        {!s.page_break && <><div className="gap" />{second}</>}
+        {!s.page_break && <>{blank}{second}</>}
       </div>{number(1)}</article>
       {s.page_break && <article className="page" style={page}><div className="sheet" style={sheet}>{second}</div>{number(2)}</article>}
     </section>

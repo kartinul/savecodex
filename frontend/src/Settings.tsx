@@ -102,10 +102,24 @@ export function Switch({ label, tip, checked, onChange }: { label: string; tip?:
   return <label className="row"><span>{label}{tip && <Tip t={tip} />}</span><input type="checkbox" className="sw" checked={checked} onChange={e => onChange(e.target.checked)} /></label>;
 }
 
+/** Forgets everything this browser saved (settings, layout, own themes) and starts over. */
+function reset() {
+  if (!confirm("Reset every setting to its default and delete your saved themes?")) return;
+  try { Object.keys(localStorage).filter(k => k.startsWith("savecodex.")).forEach(k => localStorage.removeItem(k)) } catch { /* private mode */ }
+  location.reload();
+}
+
 export function SettingsView({ mode, s, set, themes, onEditTheme, apiKey, setApiKey, onBack }: { mode: Mode; s: Settings; set: Set; themes: string[]; onEditTheme: () => void; apiKey: string; setApiKey: (k: string) => void; onBack: () => void }) {
   return (
     <div className="cfg">
-      <header className="cfg-head"><h1 className="title">settings</h1><button className="btn small" onClick={onBack}>back</button></header>
+      <header className="cfg-head"><h1 className="title">settings</h1>
+        <span className="pick">
+          <button className="btn small icon" title="reset everything" aria-label="Reset all settings and delete saved themes" onClick={reset}>
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 7v4M9.2 7v4" /></svg>
+          </button>
+          <button className="btn small" onClick={onBack}>back</button>
+        </span>
+      </header>
       <h2 className="sec">terminal</h2>
       <div className="rows">
         <div className="row"><span>window<Tip t={TIP.window} /></span><Seg value={s.style} options={[["windows", "windows"], ["macos", "mac"], ["ubuntu", "ubuntu"]]} onChange={style => set({ style })} /></div>

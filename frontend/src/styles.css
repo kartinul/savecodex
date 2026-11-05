@@ -48,6 +48,8 @@ h1, h2, h3, p, figure, pre, ul { margin: 0 }
 .btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 700 }
 .btn.primary:hover { filter: brightness(1.1) }
 .btn.small { padding: 4px 10px }
+.btn.icon { padding: 4px 7px; color: var(--muted) }
+.btn.icon:hover { color: var(--fg) }
 .btn:disabled { opacity: .5; cursor: not-allowed }
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); flex: 0 1 228px; min-width: 0 }
 .seg button { border: 0; background: none; padding: 6px 4px; border-radius: var(--r-sm); color: var(--muted) }
@@ -163,7 +165,6 @@ img.shot.pop { animation: pop .4s cubic-bezier(.2, .9, .3, 1.2) }
 .page pre { font: inherit; white-space: pre-wrap }
 .page-num { position: absolute; left: 0; right: 0; text-align: center; font-size: 1.7cqw }
 .page img { width: 100%; height: auto; display: block }
-.page .gap { height: 1.4cqw }
 
 /* groups and tiles: every box keeps its size while it fills, so nothing below moves */
 .grp { display: flex; flex-direction: column; gap: 12px }
