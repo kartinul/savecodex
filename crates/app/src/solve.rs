@@ -1483,7 +1483,7 @@ fn tool(cmd: &str, args: &[&str]) -> Result<String> {
 
 fn read_pdf(path: &Path, max_pages: usize) -> Result<(String, Vec<(&'static str, Vec<u8>)>)> {
     let file = path.to_str().context("non-UTF-8 path")?;
-    let info = tool("pdfinfo", &[file]).with_context(|| format!("can't open {file} (password-protected PDFs aren't supported)"))?;
+    let info = tool("pdfinfo", &[file])?;
     let pages: usize = info.lines().find_map(|l| l.strip_prefix("Pages:")).and_then(|p| p.trim().parse().ok()).unwrap_or(0);
     if pages > max_pages {
         bail!("{file} has {pages} pages (limit {max_pages}, raise with --max-pages)");

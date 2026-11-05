@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y \
     php-cli \
     ruby \
     libssl3 \
+    poppler-utils \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
