@@ -219,7 +219,7 @@ pub async fn run_solve(inputs: &[PathBuf], opts: SolveOptions) -> Result<String>
     if let Some(ev) = &opts.events {
         let mut items: Vec<&Question> = extracted.groups.iter().flat_map(|g| &g.questions).collect();
         items.sort_by_key(|q| question_pos.get(&q.title).copied().unwrap_or(usize::MAX));
-        let items = items.iter().map(|q| Item { id: q.title.clone(), title: q.text.trim().chars().take(300).collect() }).collect();
+        let items = items.iter().map(|q| Item { id: q.title.clone(), title: q.text.trim().chars().take(3000).collect() }).collect();
         ev.send(Event::Found { items });
     }
     let group_count = extracted.groups.len();

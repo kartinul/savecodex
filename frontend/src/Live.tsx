@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { shotUrl, type Mode, type Settings, type State } from "./api";
+import { Ticker, type Step } from "./Ticker";
 
-export type Tile = { id: string; title: string; state: State; note: string; code: string; written: boolean; output: string; shots: number[] };
-export type Doc = { id: string; title: string; status: string; error: boolean; tiles: Tile[] | null; file?: { n: number; name: string } };
+export type Tile = { id: string; title: string; state: State; note: string; code: string; written: boolean; output: string; shots: number[]; since: number };
+export type Doc = { id: string; title: string; status: string; error: boolean; tiles: Tile[] | null; since: number; file?: { n: number; name: string } };
 
 const LABEL: Record<State, string> = { waiting: "waiting", writing: "writing", running: "running", fixing: "fixing", ok: "done", failed: "failed" };
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -33,7 +34,16 @@ function useTyped(text: string) {
   return text.slice(0, n);
 }
 
-function TileView({ tile, n, job, onOpen }: { tile: Tile; n: number; job: string; onOpen: () => void }) {
+/** What an active tile is doing, for its status line. */
+function stepOf(t: Tile, mode: Mode): Step {
+  if (t.state === "fixing") return "fixing";
+  if (t.state === "writing") return mode === "pack" ? "input" : "writing";
+  if (/^\s*(di)?graph\b/.test(t.code)) return "drawing";
+  if (/\b(create table|select .+ from|insert into)\b/i.test(t.code)) return "session";
+  return "running";
+}
+
+function TileView({ tile, n, job, mode, onOpen }: { tile: Tile; n: number; job: string; mode: Mode; onOpen: () => void }) {
   const typed = useTyped(tile.code);
   const done = tile.state === "ok" || tile.state === "failed";
   let body = null;
@@ -42,16 +52,16 @@ function TileView({ tile, n, job, onOpen }: { tile: Tile; n: number; job: string
   else if (done && tile.output) body = <pre className="tile-out">{tile.output.split("\n").slice(-7).join("\n")}</pre>;
   else if (tile.code) body = <pre className="tile-code">{typed.split("\n").slice(-7).join("\n")}</pre>;
   return (
-    <button className="tile" data-state={tile.state} onClick={onOpen}>
+    <button className="tile" data-state={tile.state} style={{ animationDelay: `${(n - 1) * 40}ms` }} onClick={onOpen}>
       <span className="tile-top"><span>q{n}</span><span className="state">[{LABEL[tile.state]}]</span></span>
       <span className="tile-title">{tile.title}</span>
       <span className="tile-body">{body}</span>
-      <span className="tile-note">{tile.note}</span>
+      <span className="tile-note">{tile.state === "failed" ? tile.note : !done && tile.state !== "waiting" && <Ticker step={stepOf(tile, mode)} since={tile.since} />}</span>
     </button>
   );
 }
 
-const Ghost = () => <div className="tile ghost"><div className="tile-title" /><div className="tile-body" /><div className="tile-note" /></div>;
+const Ghost = ({ since }: { since: number }) => <div className="tile ghost"><div className="tile-title"><Ticker step="reading" since={since} /></div><div className="tile-body" /><div className="tile-note" /></div>;
 
 export function Groups({ docs, job, mode, onDownload }: { docs: Doc[]; job: string; mode: Mode; onDownload: (d: Doc) => void }) {
   const [open, setOpen] = useState<{ doc: string; id: string } | null>(null);
@@ -73,7 +83,7 @@ export function Groups({ docs, job, mode, onDownload }: { docs: Doc[]; job: stri
               {d.file && <button className="link" onClick={() => onDownload(d)}>download</button>}
             </header>
             <div className="tiles">
-              {d.tiles ? d.tiles.map((t, i) => <TileView key={t.id} tile={t} n={i + 1} job={job} onOpen={() => setOpen({ doc: d.id, id: t.id })} />) : !d.error && <Ghost />}
+              {d.tiles ? d.tiles.map((t, i) => <TileView key={t.id} tile={t} n={i + 1} job={job} mode={mode} onOpen={() => setOpen({ doc: d.id, id: t.id })} />) : !d.error && <Ghost since={d.since} />}
             </div>
           </section>
         );
@@ -121,14 +131,14 @@ export function DocPreview({ mode, s, name, preview }: { mode: Mode; s: Settings
   return (
     <section className="pages" aria-label="Document preview">
       <p># how {fill(s.output || (mode === "solve" ? "{}_solved" : "{}_pack"))}.docx will look</p>
-      <article className="page">
+      <article className="page"><div className="sheet">
         <h1>{fill(s.doc_title) || name}</h1>
         {s.doc_text && <pre>{fill(s.doc_text)}</pre>}
         <div className="gap" />
         {first}
         {!s.page_break && <><div className="gap" />{second}</>}
-      </article>
-      {s.page_break && <article className="page">{second}</article>}
+      </div></article>
+      {s.page_break && <article className="page"><div className="sheet">{second}</div></article>}
     </section>
   );
 }

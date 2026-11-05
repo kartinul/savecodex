@@ -308,6 +308,11 @@ enum Commands {
         #[arg(long, env = "SAVECODEX_CHECK", num_args = 0..=1, default_missing_value = "0.7", value_name = "CONFIDENCE")]
         check: Option<f32>,
 
+        /// Your own instructions for the AI (e.g. "use Java", "comment every line"). Every prompt puts
+        /// them first and they win over savecodex's own rules, except the reply format.
+        #[arg(long, env = "SAVECODEX_INSTRUCTIONS")]
+        instructions: Option<String>,
+
         #[command(flatten)]
         doc: DocArgs,
 
@@ -412,7 +417,7 @@ pub async fn run() -> Result<()> {
                 crate::pack::run_pack(&folder, resolved_output.as_deref(), &ext, resolved_doc_title.as_deref(), resolved_doc_text.as_deref(), doc.page_break, &opts, doc.jobs, recursive, doc.ai_input, !doc.no_trim, None).await?;
             }
         }
-        Commands::Solve { inputs, questions, max_pages, check, doc, shot, ai } => {
+        Commands::Solve { inputs, questions, max_pages, check, instructions, doc, shot, ai } => {
             ai.apply();
             let custom_cwd = shot.cwd.is_some();
             let mut term = shot.options();
@@ -452,7 +457,8 @@ pub async fn run() -> Result<()> {
                     tag: if multi { name.clone() } else { String::new() },
                     events: None,
                 };
-                set.spawn(async move { (i, name, crate::solve::run_solve(&run, opts).await) });
+                let rules = crate::ai::RunAi { config: None, instructions: instructions.clone() };
+                set.spawn(crate::ai::scoped(rules, async move { (i, name, crate::solve::run_solve(&run, opts).await) }));
             }
             let mut results = tokio::select! {
                 results = set.join_all() => results,

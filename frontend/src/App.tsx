@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DEFAULTS, clearJob, docUrl, followJob, previewUrl, startJob, type JobEvent, type Mode, type Settings, type Upload } from "./api";
 import { DocPreview, Groups, Idle, type Doc } from "./Live";
 import { SettingsView, Toml } from "./Settings";
+import { Ticker } from "./Ticker";
 
 type Phase = "idle" | "running" | "done";
 
@@ -30,12 +31,12 @@ const size = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024
 const SAY: Record<string, string> = { writing: "writing the answer", running: "running it", fixing: "fixing it", ok: "done", failed: "failed" };
 
 function reduce(docs: Doc[], e: JobEvent, mode: Mode): Doc[] {
-  if (e.t === "docs") return e.items.map(d => ({ id: d.id, title: d.title, status: "waiting to start", error: false, tiles: null }));
+  if (e.t === "docs") return e.items.map(d => ({ id: d.id, title: d.title, status: "waiting to start", error: false, tiles: null, since: Date.now() }));
   return docs.map(d => {
     if (d.id !== e.doc) return d;
     switch (e.t) {
-      case "reading": return { ...d, status: e.pages ? `reading ${e.pages} pages` : "reading the file" };
-      case "found": return { ...d, status: `found ${e.items.length} ${mode === "solve" ? "questions" : "files"}`, tiles: e.items.map(i => ({ ...i, state: "waiting", note: "", code: "", written: false, output: "", shots: [] })) };
+      case "reading": return { ...d, since: Date.now(), status: e.pages ? `reading ${e.pages} pages` : "reading the file" };
+      case "found": return { ...d, status: `found ${e.items.length} ${mode === "solve" ? "questions" : "files"}`, tiles: e.items.map(i => ({ ...i, state: "waiting", note: "", code: "", written: false, output: "", shots: [], since: Date.now() })) };
       case "done": return { ...d, status: "ready to download", file: { n: e.file, name: e.name } };
       case "error": return { ...d, status: e.message, error: true };
     }
@@ -44,7 +45,7 @@ function reduce(docs: Doc[], e: JobEvent, mode: Mode): Doc[] {
     if (k < 0) return d;
     const tiles = [...d.tiles], t = { ...tiles[k] };
     let status = d.status;
-    if (e.t === "step") { t.state = e.state; t.note = e.note; status = `q${k + 1}: ${e.note || SAY[e.state] || e.state}` }
+    if (e.t === "step") { if (t.state !== e.state) t.since = Date.now(); t.state = e.state; t.note = e.note; status = `q${k + 1}: ${e.note || SAY[e.state] || e.state}` }
     if (e.t === "code") { t.code = e.code; t.written = e.written }
     if (e.t === "output") t.output = e.text.replace(/\r/g, "");
     if (e.t === "shot") t.shots = [...t.shots, e.n];
@@ -139,7 +140,9 @@ export default function App() {
   const tiles = docs.flatMap(d => d.tiles ?? []);
   const ready = tiles.filter(t => t.state === "ok" || t.state === "failed").length;
   const found = docs.length > 0 && docs.every(d => d.tiles || d.error);
-  const progress = !found ? "reading your files" : ready < tiles.length ? `${ready} of ${tiles.length} ${mode === "solve" ? "answers" : "files"} ready` : "putting your documents together";
+  const progress = !found ? <Ticker step="reading" since={docs[0]?.since ?? Date.now()} />
+    : ready < tiles.length ? `${ready} of ${tiles.length} ${mode === "solve" ? "answers" : "files"} ready`
+    : <Ticker step="packing" since={Math.max(...tiles.map(t => t.since))} />;
   const pct = found && tiles.length ? ready / tiles.length : 0;
   const cells = Math.round(pct * 24);
   const finished = docs.filter(d => d.file);

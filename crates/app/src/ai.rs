@@ -12,6 +12,7 @@ use tokio::sync::Semaphore;
 use crate::prompts::input_generation_prompt;
 
 /// One piece of a multimodal prompt: text, or an image as (mime type, bytes).
+#[derive(Clone)]
 pub enum Part {
     Text(String),
     Image(&'static str, Vec<u8>),
@@ -116,22 +117,25 @@ static ANSWERED_BY: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
 static AGENT_SLOTS: OnceLock<Vec<Arc<Semaphore>>> = OnceLock::new();
 static LAST_AGENT_START: OnceLock<tokio::sync::Mutex<Instant>> = OnceLock::new();
 
+/// Per-run AI settings from the user: their own OpenAI-compatible key (every tier) and their own
+/// instructions, which every prompt of the run puts first.
+#[derive(Clone, Default)]
+pub struct RunAi {
+    pub config: Option<AiConfig>,
+    pub instructions: Option<String>,
+}
+
 tokio::task_local! {
-    /// A web user's own OpenAI-compatible key, used for every tier of their run.
-    static USER_AI: AiConfig;
+    static RUN: RunAi;
 }
 
-/// Runs `fut` with the user's own AI config, or the server's when None.
-pub async fn with_user_ai<F: std::future::Future>(config: Option<AiConfig>, fut: F) -> F::Output {
-    match config {
-        Some(c) => USER_AI.scope(c, fut).await,
-        None => fut.await,
-    }
+pub async fn scoped<F: std::future::Future>(run: RunAi, fut: F) -> F::Output {
+    RUN.scope(run, fut).await
 }
 
-/// Keeps the caller's user AI config inside a spawned task.
+/// Keeps the caller's `RunAi` inside a spawned task.
 pub fn inherit<F: std::future::Future>(fut: F) -> impl std::future::Future<Output = F::Output> {
-    with_user_ai(USER_AI.try_with(Clone::clone).ok(), fut)
+    scoped(RUN.try_with(Clone::clone).unwrap_or_default(), fut)
 }
 
 /// Values from CLI flags (e.g. `SMART_PROVIDER`), checked before the environment.
@@ -199,7 +203,7 @@ impl AiConfig {
 
 /// Configs to try for `tier`: CLI flags / env first, then every agent CLI on PATH, then `GEMINI_API_KEY`.
 pub fn resolve(tier: Tier) -> Result<Vec<AiConfig>> {
-    if let Ok(user) = USER_AI.try_with(|c| AiConfig { tier, ..c.clone() }) {
+    if let Ok(Some(user)) = RUN.try_with(|r| r.config.clone().map(|c| AiConfig { tier, ..c })) {
         return Ok(vec![user]);
     }
     resolve_with(tier, &var, &find_bin)
@@ -278,6 +282,17 @@ pub fn describe(tier: Tier) -> String {
 /// Ask `tier`'s model. Auto-detected agents fall through to the next one on failure (usage limit,
 /// not logged in, …) and stay skipped for the rest of the run; an explicitly set provider just fails.
 pub async fn ask(tier: Tier, parts: &[Part], json_only: bool) -> Result<String> {
+    let instructions = RUN.try_with(|r| r.instructions.clone()).ok().flatten();
+    let with_rules: Vec<Part>;
+    let parts = match instructions {
+        Some(rules) => {
+            with_rules = std::iter::once(Part::Text(format!("The user's own instructions. Follow them first, in every answer; \
+                when they conflict with anything below, they win, except for the reply format asked below.\n<instructions>\n{rules}\n</instructions>")))
+                .chain(parts.iter().cloned()).collect();
+            &with_rules[..]
+        }
+        None => parts,
+    };
     let mut last_err = None;
     for config in resolve(tier)? {
         if config.auto && is_dead(&config) {

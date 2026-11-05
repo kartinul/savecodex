@@ -13,6 +13,7 @@ export const TIP = {
   text: "written under the title, like your name and roll number; {} is the file name",
   file: "the name of the word file you download; {} is the uploaded file name",
   pages: "start each answer on a new page",
+  rules: "your own rules the ai follows before anything else, like \"use java\" or \"comment every line\"",
   check: "the ai grades every answer and redoes the wrong ones; takes longer",
   key: "use your own openai-compatible account instead of the shared one; never saved",
   url: "where your key works; leave empty for openai",
@@ -103,7 +104,12 @@ export function SettingsView({ mode, s, set, apiKey, setApiKey, onBack }: { mode
       </div>
       {mode === "solve" && <>
         <h2 className="sec">answers</h2>
-        <div className="rows"><Switch label="double-check answers" tip={TIP.check} checked={s.check} onChange={check => set({ check })} /></div>
+        <div className="rows">
+          <label className="row stack"><span>ai instructions<Tip t={TIP.rules} /></span>
+            <textarea className="ri" rows={3} value={s.instructions} placeholder="use java, keep answers short, comment the code…" onChange={e => set({ instructions: e.target.value })} />
+          </label>
+          <Switch label="double-check answers" tip={TIP.check} checked={s.check} onChange={check => set({ check })} />
+        </div>
       </>}
       <details>
         <summary>own api key</summary>

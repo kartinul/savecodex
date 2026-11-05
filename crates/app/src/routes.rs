@@ -68,6 +68,7 @@ async fn start(mode: Mode, multipart: Multipart) -> Response {
         Job::remove(&id);
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "job isolation failure" }))).into_response();
     }
+    let instructions = matches!(mode, Mode::Solve).then(|| field(&fields, "instructions").map(|t| t.chars().take(4000).collect())).flatten();
     let run = {
         let job = job.clone();
         async move {
@@ -78,7 +79,7 @@ async fn start(mode: Mode, multipart: Multipart) -> Response {
             job.finish();
         }
     };
-    job.set_task(tokio::spawn(crate::ai::with_user_ai(ai, run)).abort_handle());
+    job.set_task(tokio::spawn(crate::ai::scoped(crate::ai::RunAi { config: ai, instructions }, run)).abort_handle());
     Json(json!({ "id": id })).into_response()
 }
 
@@ -214,6 +215,7 @@ async fn solve_job(job: &Arc<Job>, files: Vec<PathBuf>, f: &Fields) {
         };
         set.spawn(crate::ai::inherit(async move {
             if let Err(e) = crate::solve::run_solve(&run, opts).await {
+                tracing::warn!("solve of {} failed: {e:#}", run[0].display());
                 ev.send(Event::Error { message: format!("{e:#}") });
             }
         }));
@@ -236,7 +238,10 @@ async fn pack_job(job: &Arc<Job>, input: &Path, files: Vec<PathBuf>, f: &Fields)
     match crate::pack::run_pack(&folder, Some(&out), &[], Some(&title), text.as_deref(), page_break, &term, 15, true, crate::pack::AiInput::Auto, true, Some(ev.clone())).await {
         Ok(Some(path)) => ev.done(path.file_name().unwrap_or_default().to_string_lossy().into_owned(), path),
         Ok(None) => ev.send(Event::Error { message: "no code files found".into() }),
-        Err(e) => ev.send(Event::Error { message: format!("{e:#}") }),
+        Err(e) => {
+            tracing::warn!("pack of {name} failed: {e:#}");
+            ev.send(Event::Error { message: format!("{e:#}") })
+        }
     }
 }
 

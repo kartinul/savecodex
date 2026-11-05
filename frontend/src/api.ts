@@ -14,13 +14,14 @@ export type Settings = {
   output: string;
   page_break: boolean;
   check: boolean;
+  instructions: string;
   base_url: string;
   model: string;
 };
 
 export const DEFAULTS: Settings = {
   style: "windows", theme: "dark", username: "user", hostname: "laptop", cwd: "lab", messy: 0, min_cols: 80, seed: 1,
-  doc_title: "", doc_text: "", output: "", page_break: true, check: false, base_url: "", model: "",
+  doc_title: "", doc_text: "", output: "", page_break: true, check: false, instructions: "", base_url: "", model: "",
 };
 
 export type Upload = { file: File; path: string };
@@ -53,7 +54,7 @@ export async function startJob(mode: Mode, uploads: Upload[], s: Settings, apiKe
   const body = new FormData();
   const fields: Record<string, string> = {
     ...shotFields(s), doc_title: s.doc_title, doc_text: s.doc_text, output: s.output,
-    page_break: String(s.page_break), check: String(s.check), api_key: apiKey, base_url: s.base_url, model: s.model,
+    page_break: String(s.page_break), check: String(s.check), instructions: s.instructions, api_key: apiKey, base_url: s.base_url, model: s.model,
   };
   for (const [k, v] of Object.entries(fields)) body.append(k, v);
   for (const u of uploads) body.append(u.path, u.file, u.file.name);
