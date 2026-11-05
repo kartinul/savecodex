@@ -3,6 +3,8 @@
 savecodex reads all the files in the folder you select, generate input automatically using ai, types those inputs, takes screenshots, makes documents and downloads it (docx).
 Just select your folder and enter your GEMINI API KEY to begin with.
 
+▶ [Watch the demo video](https://youtu.be/4t4ck5AG-Kg)
+
 <p align="center">
   <img src="docs/macos-dark.png" width="32%" alt="macOS style">
   <img src="docs/windows-dark.png" width="32%" alt="Windows style">
