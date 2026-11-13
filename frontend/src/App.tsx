@@ -82,7 +82,8 @@ export default function App() {
   }, [phase]);
   const mode = view.mode, files = uploads[mode];
   const set = (patch: Partial<Settings>) => setSettings({ ...settings, ...patch });
-  const preview = useDebounced(previewUrl(settings), 200);
+  const name = files[0] ? stem(files[0].path.split("/")[0]) : mode === "solve" ? "document" : "code";
+  const preview = useDebounced(previewUrl({ ...settings, cwd: settings.cwd.split("{}").join(name) }), 200);
   const themes = [...presets, ...Object.values(custom)];
   const theme = themes.find(t => t.name === settings.doc_theme) ?? presets[0];
   const names = themes.map(t => t.name);
@@ -183,7 +184,6 @@ export default function App() {
   const pct = found && tiles.length ? ready / tiles.length : 0;
   const cells = Math.round(pct * 24);
   const finished = docs.filter(d => d.file);
-  const name = files[0] ? stem(files[0].path.split("/")[0]) : mode === "solve" ? "document" : "code";
   const noun = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 
   return (
@@ -207,7 +207,7 @@ export default function App() {
         {cfg && phase === "idle" ? editing && theme ? (
           <ThemeView theme={theme} names={names} custom={custom} setCustom={setCustom} select={doc_theme => set({ doc_theme })} onBack={() => setEditing(false)} />
         ) : (
-          <SettingsView mode={mode} s={settings} set={set} themes={names} onEditTheme={() => setEditing(true)} apiKey={apiKey} setApiKey={setApiKey} onBack={() => setCfg(false)} />
+          <SettingsView mode={mode} s={settings} set={set} themes={names} name={name} onEditTheme={() => setEditing(true)} apiKey={apiKey} setApiKey={setApiKey} onBack={() => setCfg(false)} />
         ) : <>
           <h1 className="title">{mode === "solve" ? "solve a document" : "pack your code"}</h1>
           {phase === "idle" && <>
@@ -233,7 +233,7 @@ export default function App() {
                 ))}
               </ul>
             )}
-            <Toml s={settings} set={set} themes={names} onMore={() => setCfg(true)} />
+            <Toml s={settings} set={set} themes={names} name={name} onMore={() => setCfg(true)} />
           </>}
           <div className="action" aria-live="polite">
             {phase === "idle" && <button className="btn primary" disabled={!files.length} onClick={run}>{files.length ? `${mode} ${noun(files.length)}` : "add a file to start"}</button>}

@@ -391,6 +391,20 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         }
     }
 
+    let messy = opts.messy.min(3) as i32;
+    let hash = |parts: &[&str]| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        parts.hash(&mut hasher);
+        hasher.finish()
+    };
+    // habits stay the same for one person's whole document, each shot only jitters
+    let habit_seed = opts.seed.unwrap_or_else(|| hash(&[&opts.username, &opts.hostname, &opts.cwd]));
+    let mut habit = Rng(habit_seed);
+    let mut rng = Rng(habit_seed ^ hash(&[&raw]));
+    let blank_rows = rng.below(messy * 2 + 1);
+    let rows = lines.len() as i32 + blank_rows;
+
     let max_line_w = lines
         .iter()
         .map(|runs| runs.iter().map(|r| text_width(if r.bold { &font_bold } else { &font_regular }, scale, &r.text)).sum::<i32>())
@@ -408,7 +422,7 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         WindowStyle::Ubuntu => format!("{}@{}: {}", opts.username, opts.hostname, cwd),
         WindowStyle::Macos => {
             let cols = (content_w as f32 / cell_w).round() as usize;
-            let rows = ((lines.len() as i32 * line_h as i32 + opts.padding * 2) as f32 / line_h) as usize;
+            let rows = ((rows * line_h as i32 + opts.padding * 2) as f32 / line_h) as usize;
             format!("{} — -zsh — {}×{}", opts.username, cols, rows)
         }
     };
@@ -422,27 +436,9 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
     let gutter = if style == WindowStyle::Macos { (16.0 * u).round() as i32 } else { 0 };
     content_w = content_w.max(chrome_min_w as i32 - padding * 2 - gutter);
 
-    let messy = opts.messy.min(3);
-    let seed = opts.seed.unwrap_or_else(|| {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        raw.hash(&mut hasher);
-        hasher.finish()
-    });
-    let mut rng = Rng(seed);
     let lh = line_h as i32;
-    let mut edge_cut = |max: i32| if messy >= 1 && rng.chance(15 * messy as i32) { 1 + rng.below(max) } else { 0 };
-    let top_cut = edge_cut(lh / 3);
-    let left_cut = edge_cut(cell_w as i32 / 2);
-    let right_cut = edge_cut(cell_w as i32);
-    let bottom_cut = edge_cut(lh / 3);
-    let top_cut = if top_cut > 0 { padding + top_cut } else { 0 };
-    let left_cut = if left_cut > 0 { padding + left_cut } else { 0 };
-    let right_cut = if right_cut > 0 { padding + right_cut } else { 0 };
-    let bottom_cut = if bottom_cut > 0 { padding + bottom_cut } else { 0 };
-    let extra_bottom = if messy >= 1 && bottom_cut == 0 { rng.below(lh * 2) } else { 0 };
-    let img_w = content_w + padding * 2 + gutter - left_cut - right_cut;
-    let img_h = title_bar_h + padding * 2 + (lines.len() as i32 * lh).max(lh) - top_cut - bottom_cut + extra_bottom;
+    let img_w = content_w + padding * 2 + gutter;
+    let img_h = title_bar_h + padding * 2 + (rows * lh).max(lh);
     let (w, h) = (img_w as f32, img_h as f32);
 
     let mut img = RgbaImage::from_pixel(img_w as u32, img_h as u32, rgba(bg));
@@ -548,21 +544,23 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         }
     }
 
-    let chrome = (messy >= 1).then(|| img.clone());
-    let selection = (messy >= 3 && !lines.is_empty()).then(|| {
+    // a double-clicked word, or now and then the whole line
+    let selection = (messy >= 3 && rng.chance(40)).then(|| {
         let line = rng.below(lines.len() as i32) as usize;
-        let len: i32 = lines[line].iter().map(|r| r.text.chars().count() as i32).sum();
-        let start = rng.below(len.max(1));
-        (line, start, 1 + rng.below((len - start).max(1)))
-    });
-    let mut cursor = (padding - left_cut, 0);
-    let mut y = title_bar_h + padding - top_cut;
+        let chars: Vec<char> = lines[line].iter().flat_map(|r| r.text.chars()).collect();
+        let starts: Vec<usize> = (0..chars.len()).filter(|&i| !chars[i].is_whitespace() && (i == 0 || chars[i - 1].is_whitespace())).collect();
+        let start = *starts.get(rng.below(starts.len() as i32) as usize)?;
+        let word = chars[start..].iter().take_while(|c| !c.is_whitespace()).count();
+        Some(if rng.chance(25) { (line, 0, chars.len()) } else { (line, start, word) })
+    }).flatten();
+    let mut cursor = (padding, 0);
+    let mut y = title_bar_h + padding;
     for (line_idx, runs) in lines.iter().enumerate() {
-        let mut x = padding - left_cut;
+        let mut x = padding;
         if let Some((line, start, len)) = selection {
             if line == line_idx {
-                let rect = Rect::at(x + (start as f32 * cell_w) as i32, y).of_size((len as f32 * cell_w) as u32, lh as u32);
-                draw_filled_rect_mut(&mut img, rect, Rgba([58, 92, 150, 255]));
+                let highlight = if light { Rgb(179, 215, 255) } else { Rgb(58, 92, 150) };
+                fill_rect(&mut img, x as f32 + start as f32 * cell_w, y as f32, len as f32 * cell_w, line_h, rgba(highlight));
             }
         }
         for r in runs {
@@ -581,34 +579,74 @@ pub fn generate_terminal_image(raw_text: &str, opts: &TermGenOptions) -> Result<
         WindowStyle::Ubuntu => fill_rect(&mut img, cx, cy, cell_w, line_h, rgba(default_fg)),
     }
 
-    let Some(chrome) = chrome else { return Ok(crop_title_bar(img, title_bar_h, opts)) };
+    if messy >= 2 && style != WindowStyle::Macos && rng.chance(50) {
+        let thumb_h = (lh * (2 + rng.below(6))).min(img_h - title_bar_h - 8);
+        let mix = |c: u8| ((c as u32 * 45 + 128 * 55) / 100) as u8;
+        fill_rect(&mut img, w - 9.0, (img_h - 4 - thumb_h) as f32, 5.0, thumb_h as f32, rgba(Rgb(mix(bg.0), mix(bg.1), mix(bg.2))));
+    }
+    let img = crop_title_bar(img, title_bar_h, opts);
+    if messy == 0 { return Ok(img) }
 
-    for (px, py, pixel) in img.enumerate_pixels_mut() {
-        if py < title_bar_h as u32 {
-            *pixel = *chrome.get_pixel(px, py);
-        }
-    }
-    if messy >= 2 && rng.chance(50) {
-        let thumb_h = lh * (2 + rng.below(6));
-        let top = title_bar_h + 4 + rng.below((img_h - title_bar_h - thumb_h - 8).max(1));
-        draw_filled_rect_mut(&mut img, Rect::at(img_w - 9, top).of_size(5, thumb_h as u32), Rgba([128, 128, 128, 140]));
-    }
-    if messy >= 2 && rng.chance(40) {
-        for pixel in img.rows_mut().take(title_bar_h as usize).flatten() {
-            let luma = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
-            for c in 0..3 {
-                pixel[c] = ((pixel[c] as u32 * 45 + luma * 55) / 100) as u8;
-            }
-        }
-    }
+    const BACKDROPS: [Rgb; 5] = [Rgb(30, 30, 30), Rgb(243, 243, 243), Rgb(255, 255, 255), Rgb(24, 62, 116), Rgb(58, 58, 60)];
+    let backdrop = BACKDROPS[habit.below(BACKDROPS.len() as i32) as usize];
+    let shrink = 80 + habit.below(16) as u32;
+    // cuts stop short of the text: [top, left, right, bottom]
+    let limits = [
+        if opts.no_title_bar { 0 } else { title_bar_h - 2 },
+        padding - 1,
+        padding + gutter + content_w - max_line_w - cell_w as i32 - 1,
+        padding + blank_rows * lh - 1,
+    ];
+    let [mut top, left, right, bottom] = capture_offsets(messy, &mut habit, &mut rng, limits);
+    if opts.no_title_bar { top = 0 }
+    let (img_w, img_h) = (img.width() as i32, img.height() as i32);
+    let mut shot = RgbaImage::from_pixel((img_w - left - right) as u32, (img_h - top - bottom) as u32, rgba(backdrop));
+    image::imageops::overlay(&mut shot, &img, -left as i64, -top as i64);
+    // blending rounds some corner pixels down to alpha 254
+    shot.pixels_mut().for_each(|p| p[3] = 255);
     if messy >= 3 {
-        img = image::imageops::blur(&img, 0.6);
+        // pasted into the document at another size
+        let (w, h) = (shot.width() * shrink / 100, shot.height() * shrink / 100);
+        shot = image::imageops::resize(&shot, w, h, image::imageops::FilterType::Triangle);
     }
-    Ok(crop_title_bar(img, title_bar_h, opts))
+    Ok(shot)
+}
+
+/// How far the capture misses each window edge: negative leaves backdrop showing, positive cuts into the window (never past `limits`).
+fn capture_offsets(level: i32, habit: &mut Rng, shot: &mut Rng, limits: [i32; 4]) -> [i32; 4] {
+    let (out, inward) = [(3, 2), (10, 6), (24, 12)][level as usize - 1];
+    limits.map(|limit| {
+        let base = habit.below(out + inward + 1) - out;
+        let jitter = shot.below(2 * level + 1) - level;
+        (base + jitter).clamp(-out, inward.min(limit.max(0)))
+    })
 }
 
 fn crop_title_bar(mut img: RgbaImage, title_bar_h: i32, opts: &TermGenOptions) -> RgbaImage {
     if !opts.no_title_bar { return img; }
     let (w, h) = img.dimensions();
     image::imageops::crop(&mut img, 0, title_bar_h as u32, w, h - title_bar_h as u32).to_image()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn messy_never_cuts_text_or_leaves_holes() {
+        let limits = [20, 5, 0, 3];
+        for level in 1..=3 {
+            for seed in 0..300 {
+                let offsets = capture_offsets(level, &mut Rng(seed), &mut Rng(seed * 7 + 1), limits);
+                assert!(offsets.iter().zip(limits).all(|(o, l)| *o <= l), "level {level} seed {seed}: {offsets:?}");
+            }
+            for style in [WindowStyle::Windows, WindowStyle::Macos, WindowStyle::Ubuntu] {
+                for seed in 0..10 {
+                    let opts = TermGenOptions { messy: level as u8, seed: Some(seed), style, padding: style.padding(), ..Default::default() };
+                    let img = generate_terminal_image("$ ./a.out\nhello world", &opts).unwrap();
+                    assert!(img.pixels().all(|p| p[3] == 255), "{style:?} level {level} seed {seed}");
+                }
+            }
+        }
+    }
 }

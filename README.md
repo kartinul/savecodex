@@ -1,17 +1,10 @@
 # savecodex
 
-savecodex runs every code file in a folder, has AI write the input each one needs, types it in, screenshots the terminal and packs code and screenshots into a DOCX.
-Point it at a folder and it uses the agent CLI you already have (`claude`, `codex`, ...) or a Gemini API key.
+Give it your assignment PDF, get back a DOCX with every answer written, run and screenshotted.
 
-▶ [Watch the demo video](https://youtu.be/4t4ck5AG-Kg)
-
-<p align="center">
-  <img src="docs/macos-dark.png" width="32%" alt="macOS style">
-  <img src="docs/windows-dark.png" width="32%" alt="Windows style">
-  <img src="docs/ubuntu-dark.png" width="32%" alt="Ubuntu style">
-</p>
-
-It can also solve a whole assignment: give it the PDF and it writes the answers, runs them and packs them the same way.
+```bash
+savecodex solve lab7.pdf
+```
 
 <p align="center">
   <img src="docs/pack-java.png" width="32%" alt="Java code and its run">
@@ -19,67 +12,43 @@ It can also solve a whole assignment: give it the PDF and it writes the answers,
   <img src="docs/solve-er.png" width="32%" alt="ER diagram">
 </p>
 
-## Installation
+▶ [Watch the demo video](https://youtu.be/4t4ck5AG-Kg)
 
-Grab a binary from [Releases](https://github.com/kartinul/savecodex/releases/latest):
+## Quick start
 
-```bash
-curl -Lo savecodex https://github.com/kartinul/savecodex/releases/latest/download/savecodex-macos-arm64
-chmod +x savecodex
-```
+1. Get the binary (macOS, [other builds](#installation) below):
 
-Other builds: `savecodex-macos-amd64`, `savecodex-linux-amd64`, `savecodex-windows-amd64.exe`.
+   ```bash
+   curl -Lo savecodex https://github.com/kartinul/savecodex/releases/latest/download/savecodex-macos-arm64
+   chmod +x savecodex && sudo mv savecodex /usr/local/bin/
+   brew install poppler  # reads the PDFs
+   ```
 
-Or build it yourself (needs Rust and [bun](https://bun.sh)) with `make build`, or use Docker (`Dockerfile` / `render.yaml`).
-Your code runs with the compilers on your machine, so have the ones you need (`python3`, `gcc`, `java`, ...).
+2. Have an AI. If `claude`, `codex` or another [agent CLI](#ai) is logged in you're done, otherwise get a [free Gemini key](https://aistudio.google.com/app/apikey):
 
-## AI
+   ```bash
+   export GEMINI_API_KEY=your_key
+   ```
 
-You don't need an API key if you already have an agent CLI logged in. savecodex uses the first one on your `PATH`:
-`claude`, `codex`, `gemini`, `cursor-agent`, `opencode`, `copilot`, `qwen`, `amp`, `agy`. If one fails mid run (usage limit, logged out) the next one takes over.
+3. Run it:
 
-| Want | Do |
-|---|---|
-| a specific one | `-p codex` |
-| fully local, nothing leaves your machine | `--local` (Ollama, first installed model) |
-| Gemini API | `GEMINI_API_KEY` ([free key](https://aistudio.google.com/app/apikey)) |
-| any OpenAI compatible API (Groq, OpenRouter, LM Studio, ...) | `SMART_PROVIDER=openai` with `SMART_BASE_URL`, `SMART_API_KEY`, `SMART_MODEL` |
+   ```bash
+   savecodex solve lab7.pdf  # solves the assignment        → lab7_solved.docx
+   savecodex pack lab5       # code you already wrote       → lab5_pack.docx
+   savecodex serve           # same two in the browser      → http://localhost:7878
+   ```
 
-The work is split into 3 tiers: SMART reads the assignment (`solve`), MID solves it, FAST writes program input. An unset tier falls back to the one above, so you can mix them:
+That's all most people need. Everything below is for changing how it looks or which AI it uses.
 
-```bash
-savecodex solve hw.pdf -p claude --fast-provider ollama
-```
-
-`solve` sends PDF pages as images, so pick a vision model if you run it locally.
-Put your settings in `.env` (`cp .env.example .env`), `./apitest` checks your Gemini/OpenAI keys.
-
-## Usage
-
-```bash
-savecodex serve                       # web UI on http://localhost:7878
-savecodex solve lab7.pdf records.txt  # → lab7_solved.docx
-savecodex pack lab5                   # → lab5_pack.docx
-```
-
-### `serve`
-
-A web UI for both `solve` and `pack`: drop files, watch every question or file get written, run and screenshotted live, then download the DOCX. Everyone uses the server's AI config; users can paste their own OpenAI-compatible key, base URL and model instead (https only, public addresses only).
-
-| Option | Default | |
-|---|---|---|
-| `--port` | `7878` | |
-| `--host` | `127.0.0.1` | |
-| `--debug` | off | Debug logging |
-
-Also takes the AI flags (`-p`, `--local`, `--fast-model`, ...).
+## Commands
 
 ### `solve`
 
 Reads questions from PDFs, DOCX files and images, solves them, runs every answer and writes a DOCX. An answer is code with its terminal screenshot, SQL or commands typed into a real `mysql>` / `$` session, a picture (ER/UML diagram, chart or web page) or just a written answer.
 
 ```bash
-savecodex solve lab7.pdf records.txt      # records.txt gets copied next to the answers
+savecodex solve lab7.pdf                  # → lab7_solved.docx
+savecodex solve lab7.pdf records.txt      # the questions read records.txt, so hand it over too
 savecodex solve week*.pdf -o "{}_answers" # one DOCX per PDF
 ```
 
@@ -102,6 +71,7 @@ MySQL answers run in databases of their own: each session starts in a fresh one,
 Runs every code file in the given files/folders, with AI input for the ones that read stdin, and writes one DOCX per folder. A file that fails still goes in, with its error in the screenshot.
 
 ```bash
+savecodex pack lab5                       # → lab5_pack.docx
 savecodex pack lab5 -o "roll42_{}" --doc-title "Assignment {}"
 savecodex pack lab5 lab6 lab7 -o "{}_final"
 ```
@@ -111,6 +81,22 @@ savecodex pack lab5 lab6 lab7 -o "{}_final"
 | `<paths...>` | required | Files or folders to pack |
 | `-r, --recursive` | off | Include subfolders |
 | `--ext` | most common supported extension | e.g. `java,py` |
+
+### `serve`
+
+```bash
+savecodex serve                           # http://localhost:7878
+```
+
+A web UI for both `solve` and `pack`: drop files, watch every question or file get written, run and screenshotted live, then download the DOCX. Everyone uses the server's AI config; users can paste their own OpenAI-compatible key, base URL and model instead (https only, public addresses only).
+
+| Option | Default | |
+|---|---|---|
+| `--port` | `7878` | |
+| `--host` | `127.0.0.1` | |
+| `--debug` | off | Debug logging |
+
+Also takes the AI flags (`-p`, `--local`, `--fast-model`, ...).
 
 ### Document options
 
@@ -134,6 +120,12 @@ For `pack` and `solve`.
 
 For `pack`, `solve` and `term`.
 
+<p align="center">
+  <img src="docs/macos-dark.png" width="32%" alt="macOS style">
+  <img src="docs/windows-dark.png" width="32%" alt="Windows style">
+  <img src="docs/ubuntu-dark.png" width="32%" alt="Ubuntu style">
+</p>
+
 | Option | Default | |
 |---|---|---|
 | `--style` | `windows` | `windows`, `macos` or `ubuntu` |
@@ -141,8 +133,8 @@ For `pack`, `solve` and `term`.
 | `--username` | current user | |
 | `--hostname` | this machine | |
 | `--cwd` | current directory | |
-| `--messy` | `0` | Realistic imperfections, `0` to `3` |
-| `--seed` | derived from the text | Fixes `--messy` randomness |
+| `--messy` | `0` | Hand-taken look (loose window, sloppy crop, resized), `0` to `3` |
+| `--seed` | derived from username, hostname and cwd | Picks the `--messy` habits shared by every screenshot |
 | `--banner` | off | PowerShell startup banner (windows style) |
 | `--min-cols` | `80` | Minimum window width in columns |
 | `--prompt` | `"$ "` | Lines starting with this get the styled prompt |
@@ -158,6 +150,27 @@ savecodex term --text-file output.txt --no-prompt
 savecodex run main.py -i 5 -o out.txt
 ```
 
+## AI
+
+You don't need an API key if you already have an agent CLI logged in. savecodex uses the first one on your `PATH`:
+`claude`, `codex`, `gemini`, `cursor-agent`, `opencode`, `copilot`, `qwen`, `amp`, `agy`. If one fails mid run (usage limit, logged out) the next one takes over.
+
+| Want | Do |
+|---|---|
+| a specific one | `-p codex` |
+| fully local, nothing leaves your machine | `--local` (Ollama, first installed model) |
+| Gemini API | `GEMINI_API_KEY` ([free key](https://aistudio.google.com/app/apikey)) |
+| any OpenAI compatible API (Groq, OpenRouter, LM Studio, ...) | `SMART_PROVIDER=openai` with `SMART_BASE_URL`, `SMART_API_KEY`, `SMART_MODEL` |
+
+The work is split into 3 tiers: SMART reads the assignment (`solve`), MID solves it, FAST writes program input. An unset tier falls back to the one above, so you can mix them:
+
+```bash
+savecodex solve hw.pdf -p claude --fast-provider ollama
+```
+
+`solve` sends PDF pages as images, so pick a vision model if you run it locally.
+Put your settings in `.env` (`cp .env.example .env`), `./apitest` checks your Gemini/OpenAI keys.
+
 ## Languages
 
 Python, C, C++, Java, JavaScript, Rust and shell scripts work out of the box; `solve` also knows MySQL and shell sessions, Graphviz diagrams (`dot`), web pages (`html`) and matplotlib charts (`plot`). Add or change languages in `languages.json` in your config dir (`~/Library/Application Support/savecodex/` on macOS) or the folder you run from. Each language merges field by field over the [defaults](crates/app/src/default_languages.json):
@@ -172,6 +185,13 @@ Python, C, C++, Java, JavaScript, Rust and shell scripts work out of the box; `s
 ```
 
 `build`/`run` take `{file}`, `{dir}` and `{file_stem}` and can be overridden per OS (`windows`/`macos`/`linux`; `--linux` uses `linux`). `stdin` is what tells `--ai-input auto` the program reads input. `hint` is advice for the AI when it writes that language. Session languages (`session: true`) also take `prompts`, `reset`/`cleanup` commands run before and after each session, and `namespace`: keywords whose next name gets the session's `{ns}` prefix.
+
+## Installation
+
+Other builds on [Releases](https://github.com/kartinul/savecodex/releases/latest): `savecodex-macos-amd64`, `savecodex-linux-amd64`, `savecodex-windows-amd64.exe`.
+
+Or build it yourself (needs Rust and [bun](https://bun.sh)) with `make build`, or use Docker (`Dockerfile` / `render.yaml`).
+Your code runs with the compilers on your machine, so have the ones you need (`python3`, `gcc`, `java`, ...).
 
 ## Sandboxing
 

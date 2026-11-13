@@ -80,10 +80,10 @@ export type State = "waiting" | "writing" | "running" | "fixing" | "ok" | "faile
 
 const shotFields = (s: Settings) => ({
   style: s.style, theme: s.theme, username: s.username, hostname: s.hostname, cwd: s.cwd,
-  messy: String(s.messy), min_cols: String(s.min_cols),
+  messy: String(s.messy), min_cols: String(s.min_cols), seed: String(s.seed),
 });
 
-export const previewUrl = (s: Settings) => `/api/preview?${new URLSearchParams({ ...shotFields(s), seed: String(s.seed) })}`;
+export const previewUrl = (s: Settings) => `/api/preview?${new URLSearchParams(shotFields(s))}`;
 export const shotUrl = (job: string, n: number) => `/api/jobs/${job}/shot/${n}`;
 export const docUrl = (job: string, n: number) => `/api/jobs/${job}/doc/${n}`;
 export const clearJob = (job: string) => fetch(`/api/jobs/${job}`, { method: "DELETE", keepalive: true }).catch(() => {});

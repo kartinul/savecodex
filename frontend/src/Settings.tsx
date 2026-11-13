@@ -11,7 +11,7 @@ export const TIP = {
   username: "your name in the terminal line, like user@laptop",
   hostname: "the computer name after the @ in the terminal line",
   dir: "the folder the terminal shows your code running in; {} is the file name",
-  messy: "makes screenshots look taken by hand: uneven crop, a scrollbar, an unfocused window; the dice shows another sample",
+  messy: "makes screenshots look taken by hand: a loose window, a crop that misses its edges, a resized paste; the dice picks another person's habits",
   cols: "how wide the terminal window is at least, in characters",
   title: "the big heading at the top of the document; empty uses the file name, {} is the file name",
   text: "written under the title, like your name or a short note; {} is the file name",
@@ -32,16 +32,23 @@ export const Tip = ({ t }: { t: string }) => (
 const LOOKS = ["windows-dark", "windows-light", "macos-dark", "macos-light", "ubuntu-dark", "ubuntu-light"];
 type Set = (patch: Partial<Settings>) => void;
 
-function Inline({ k, v, ph, tip, onChange }: { k: string; v: string; ph?: string; tip: string; onChange: (v: string) => void }) {
+/** Shows `{}` as the upload's name until the field is being edited. */
+function useFilled(value: string, name?: string) {
+  const [editing, setEditing] = useState(false);
+  return { value: editing || name == null ? value : value.split("{}").join(name), onFocus: () => setEditing(true), onBlur: () => setEditing(false) };
+}
+
+function Inline({ k, v, ph, tip, name, onChange }: { k: string; v: string; ph?: string; tip: string; name?: string; onChange: (v: string) => void }) {
+  const filled = useFilled(v, name);
   return (
     <div><span className="k">{k}<Tip t={tip} /></span> = <span className="tq">
-      <input className="tv" value={v} placeholder={ph} style={{ width: `${Math.max((v || ph || "").length, 1)}ch` }}
+      <input className="tv" {...filled} placeholder={ph} style={{ width: `${Math.max((filled.value || ph || "").length, 1)}ch` }}
         autoComplete="off" spellCheck={false} aria-label={k} onChange={e => onChange(e.target.value)} />
     </span></div>
   );
 }
 
-export function Toml({ s, set, themes, onMore }: { s: Settings; set: Set; themes: string[]; onMore: () => void }) {
+export function Toml({ s, set, themes, name, onMore }: { s: Settings; set: Set; themes: string[]; name: string; onMore: () => void }) {
   const look = `${s.style}-${s.theme}`;
   const next = () => {
     const [style, theme] = LOOKS[(LOOKS.indexOf(look) + 1) % LOOKS.length].split("-") as [Settings["style"], Settings["theme"]];
@@ -54,8 +61,8 @@ export function Toml({ s, set, themes, onMore }: { s: Settings; set: Set; themes
       <div><span className="k">doc<Tip t={TIP.doc} /></span> = <button className="v" onClick={() => set({ doc_theme: themes[(themes.indexOf(s.doc_theme) + 1) % themes.length] ?? "current" })}>"{s.doc_theme}"</button></div>
       <Inline k="username" v={s.username} tip={TIP.username} onChange={username => set({ username })} />
       <Inline k="hostname" v={s.hostname} tip={TIP.hostname} onChange={hostname => set({ hostname })} />
-      <Inline k="dir" v={s.cwd} tip={TIP.dir} onChange={cwd => set({ cwd })} />
-      <Inline k="title" v={s.doc_title} ph="same as the upload" tip={TIP.title} onChange={doc_title => set({ doc_title })} />
+      <Inline k="dir" v={s.cwd} tip={TIP.dir} name={name} onChange={cwd => set({ cwd })} />
+      <Inline k="title" v={s.doc_title} ph="same as the upload" tip={TIP.title} name={name} onChange={doc_title => set({ doc_title })} />
       <button className="more-opts" onClick={onMore}>[+] more options</button>
     </div>
   );
@@ -65,11 +72,12 @@ export function Seg<T extends string>({ value, options, onChange }: { value: T; 
   return <div className="seg">{options.map(([v, label]) => <button key={v} aria-pressed={v === value} onClick={() => onChange(v)}>{label}</button>)}</div>;
 }
 
-function Text({ label, tip, value, ph, onChange, stack, masked }: { label: string; tip: string; value: string; ph?: string; onChange: (v: string) => void; stack?: boolean; masked?: boolean }) {
+function Text({ label, tip, value, ph, name, onChange, stack, masked }: { label: string; tip: string; value: string; ph?: string; name?: string; onChange: (v: string) => void; stack?: boolean; masked?: boolean }) {
+  const filled = useFilled(value, name);
   return (
     <label className={`row${stack ? " stack" : ""}`}>
       <span>{label}<Tip t={tip} /></span>
-      <input className={`ri${masked ? " masked" : ""}`} value={value} placeholder={ph} autoComplete="off" spellCheck={false} data-1p-ignore data-lpignore="true" onChange={e => onChange(e.target.value)} />
+      <input className={`ri${masked ? " masked" : ""}`} {...filled} placeholder={ph} autoComplete="off" spellCheck={false} data-1p-ignore data-lpignore="true" onChange={e => onChange(e.target.value)} />
     </label>
   );
 }
@@ -110,7 +118,7 @@ function reset() {
   location.reload();
 }
 
-export function SettingsView({ mode, s, set, themes, onEditTheme, apiKey, setApiKey, onBack }: { mode: Mode; s: Settings; set: Set; themes: string[]; onEditTheme: () => void; apiKey: string; setApiKey: (k: string) => void; onBack: () => void }) {
+export function SettingsView({ mode, s, set, themes, name, onEditTheme, apiKey, setApiKey, onBack }: { mode: Mode; s: Settings; set: Set; themes: string[]; name: string; onEditTheme: () => void; apiKey: string; setApiKey: (k: string) => void; onBack: () => void }) {
   return (
     <div className="cfg">
       <header className="cfg-head"><h1 className="title">settings</h1>
@@ -127,7 +135,7 @@ export function SettingsView({ mode, s, set, themes, onEditTheme, apiKey, setApi
         <div className="row"><span>colors<Tip t={TIP.colors} /></span><Seg value={s.theme} options={[["dark", "dark"], ["light", "light"]]} onChange={theme => set({ theme })} /></div>
         <Text label="username" tip={TIP.username} value={s.username} onChange={username => set({ username })} />
         <Text label="hostname" tip={TIP.hostname} value={s.hostname} onChange={hostname => set({ hostname })} />
-        <Text label="dir" tip={TIP.dir} value={s.cwd} onChange={cwd => set({ cwd })} />
+        <Text label="dir" tip={TIP.dir} value={s.cwd} name={name} onChange={cwd => set({ cwd })} />
         <div className="row"><span>messy<Tip t={TIP.messy} /></span>
           <span className="messy">
             <input type="range" min={0} max={3} step={1} value={s.messy} aria-label="messy" onChange={e => set({ messy: +e.target.value })} />
@@ -147,11 +155,11 @@ export function SettingsView({ mode, s, set, themes, onEditTheme, apiKey, setApi
             <button className="btn small" onClick={onEditTheme}>edit</button>
           </span>
         </div>
-        <Text label="title" tip={TIP.title} value={s.doc_title} ph="same as the upload" onChange={doc_title => set({ doc_title })} />
+        <Text label="title" tip={TIP.title} value={s.doc_title} ph="same as the upload" name={name} onChange={doc_title => set({ doc_title })} />
         <label className="row stack"><span>text under the title<Tip t={TIP.text} /></span>
           <textarea className="ri" rows={2} value={s.doc_text} placeholder="your name, a date, anything else" onChange={e => set({ doc_text: e.target.value })} />
         </label>
-        <Text label="file name" tip={TIP.file} value={s.output} ph={mode === "solve" ? "{}_solved" : "{}_pack"} onChange={output => set({ output })} />
+        <Text label="file name" tip={TIP.file} value={s.output} ph={`${name}_${mode === "solve" ? "solved" : "pack"}`} name={name} onChange={output => set({ output })} />
         <Switch label={mode === "solve" ? "new page per question" : "new page per file"} tip={TIP.pages} checked={s.page_break} onChange={page_break => set({ page_break })} />
         {mode === "solve" && <>
           <div className="row"><span>numbering<Tip t={TIP.numbering} /></span>

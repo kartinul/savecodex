@@ -34,11 +34,11 @@ struct ShotArgs {
     #[arg(long, value_enum, default_value_t = crate::term_gen::WindowStyle::Windows, env = "SAVECODEX_STYLE")]
     style: crate::term_gen::WindowStyle,
 
-    /// Realistic imperfections: 0 (off) to 3 (very messy).
+    /// Hand-taken look: 0 (off), 1 (loose window, crop a few px off), 2 (sloppy crop, scrollbar), 3 (careless crop, resized, a selected word).
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
     messy: u8,
 
-    /// Seed for --messy (default: derived from the output text).
+    /// Seed for the --messy habits every screenshot shares (default: derived from username, hostname and cwd).
     #[arg(long)]
     seed: Option<u64>,
 
