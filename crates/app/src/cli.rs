@@ -122,8 +122,8 @@ struct DocArgs {
     #[arg(long)]
     page_break: bool,
 
-    /// How the document looks: a preset (current, classic, academic, modern, lab record, compact,
-    /// typewriter, elegant) or a theme .json file. Fields a file leaves out keep the current look.
+    /// How the document looks: a preset (current, word, word calibri, word 2010, academic, modern,
+    /// lab record, compact, typewriter, elegant) or a theme .json file. Fields a file leaves out keep the current look.
     #[arg(long, default_value = "current", env = "SAVECODEX_DOC_THEME")]
     doc_theme: String,
 
