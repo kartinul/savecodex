@@ -320,8 +320,8 @@ enum Commands {
     /// Each question becomes code + terminal screenshot, an ER/UML diagram, or a written answer.
     /// SQL and shell commands are typed into a real `mysql>` / `$` session. SMART extracts the
     /// questions, MID solves them. With several PDF/DOCX inputs each one is solved into its own
-    /// DOCX (other inputs are shared by all; --output needs '{}'). Needs poppler (pdftotext,
-    /// pdftoppm), plus mysql and graphviz (dot) for SQL and diagram questions. AI-written code and
+    /// DOCX (other inputs are shared by all; --output needs '{}'). Needs mysql and
+    /// graphviz (dot) for SQL and diagram questions. AI-written code and
     /// commands run on this machine.
     Solve {
         /// Input files. PDFs, DOCX and images are read; other files (data like records.txt)

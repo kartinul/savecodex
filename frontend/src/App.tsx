@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { DEFAULTS, clearJob, docUrl, fetchThemes, followJob, previewUrl, startJob, type DocTheme, type JobEvent, type Mode, type Settings, type Upload } from "./api";
+import { Cli } from "./Cli";
 import { DocPreview, Groups, Idle, type Doc } from "./Live";
 import { SettingsView, Toml } from "./Settings";
 import { ThemeView } from "./Theme";
@@ -64,6 +65,8 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [cfg, setCfg] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [cli, setCli] = useState(false);
+  const [keyOpen, setKeyOpen] = useState(false);
   const [presets, setPresets] = useState<DocTheme[]>([]);
   const [custom, setCustom] = useStored<Record<string, DocTheme>>("savecodex.themes", {});
   useEffect(() => { fetchThemes().then(setPresets).catch(() => {}) }, []);
@@ -123,6 +126,7 @@ export default function App() {
 
   const run = async () => {
     unfollowAll();
+    setCli(false);
     setCfg(false);
     setEditing(false);
     setDocs([]);
@@ -151,7 +155,7 @@ export default function App() {
       if (!active.current) setPhase("done");
     }
   };
-  const home = () => { setCfg(false); setEditing(false); if (phase === "done") { stop(); setDocs([]) } };
+  const home = () => { setCli(false); setCfg(false); setEditing(false); if (phase === "done") { stop(); setDocs([]) } };
   const clear = () => { stop(); setDocs([]); setUploads({ ...uploads, [mode]: [] }) };
   const download = (list: Doc[]) => list.filter(d => d.file).forEach((d, i) => setTimeout(() => {
     const a = document.createElement("a");
@@ -190,7 +194,7 @@ export default function App() {
     <div className={`app${view.closed ? " closed" : ""}${dragging ? " dragging" : ""}`} style={{ "--side": `${view.side}px` } as React.CSSProperties}>
       <main className="main">
         <button className="title brand" onClick={home}>savecodex</button>
-        {phase === "idle"
+        {cli ? <Cli onBack={() => setCli(false)} /> : phase === "idle"
           ? cfg && theme ? <DocPreview mode={mode} s={settings} t={theme} name={name} preview={preview} /> : <Idle mode={mode} preview={preview} />
           : <Groups docs={docs} mode={mode} onDownload={d => download([d])} onRedo={docs.length > 1 ? redo : undefined} />}
       </main>
@@ -204,10 +208,10 @@ export default function App() {
           <button className="fold" aria-label={view.closed ? "Show panel" : "Hide panel"} onClick={() => setView({ ...view, closed: !view.closed })}>{view.closed ? "«" : "»"}</button>
         </div>
 
-        {cfg && phase === "idle" ? editing && theme ? (
+        {cfg && phase !== "running" ? editing && theme ? (
           <ThemeView theme={theme} names={names} custom={custom} setCustom={setCustom} select={doc_theme => set({ doc_theme })} onBack={() => setEditing(false)} />
         ) : (
-          <SettingsView mode={mode} s={settings} set={set} themes={names} name={name} onEditTheme={() => setEditing(true)} apiKey={apiKey} setApiKey={setApiKey} onBack={() => setCfg(false)} />
+          <SettingsView mode={mode} s={settings} set={set} themes={names} name={name} onEditTheme={() => setEditing(true)} apiKey={apiKey} setApiKey={setApiKey} keyOpen={keyOpen} onBack={() => setCfg(false)} />
         ) : <>
           <h1 className="title">{mode === "solve" ? "solve a document" : "pack your code"}</h1>
           {phase === "idle" && <>
@@ -247,11 +251,17 @@ export default function App() {
               <button className="btn" title="Remove the files and results" onClick={clear}>clear</button>
             </>}
           </div>
+          {phase === "done" && <p className="muted">
+            not happy with the result? <button className="link" onClick={() => setCli(true)}>use the cli</button> with your own model, or <button className="link" onClick={() => { setCli(false); setKeyOpen(true); setCfg(true) }}>add your api key</button>
+          </p>}
         </>}
-        <a className="credit" href="https://github.com/kartinul/savecodex" target="_blank" rel="noopener noreferrer">
-          made by kartinul
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
-        </a>
+        <div className="foot">
+          <a className="credit" href="https://github.com/kartinul/savecodex" target="_blank" rel="noopener noreferrer">
+            made by kartinul
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
+          </a>
+          <button className="link" onClick={() => setCli(true)}>cli</button>
+        </div>
       </aside>
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>

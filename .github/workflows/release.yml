@@ -20,9 +20,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_name: savecodex-windows-amd64.exe
           - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: savecodex-macos-amd64
-          - os: macos-14
             target: aarch64-apple-darwin
             artifact_name: savecodex-macos-arm64
     steps:

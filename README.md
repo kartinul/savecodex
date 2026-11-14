@@ -21,7 +21,6 @@ savecodex solve lab7.pdf
    ```bash
    curl -Lo savecodex https://github.com/kartinul/savecodex/releases/latest/download/savecodex-macos-arm64
    chmod +x savecodex && sudo mv savecodex /usr/local/bin/
-   brew install poppler  # reads the PDFs
    ```
 
 2. Have an AI. If `claude`, `codex` or another [agent CLI](#ai) is logged in you're done, otherwise get a [free Gemini key](https://aistudio.google.com/app/apikey):
@@ -62,7 +61,7 @@ savecodex solve week*.pdf -o "{}_answers" # one DOCX per PDF
 | `--level` | `3` | How professional the code looks: `1` careless student, `3` student in a hurry, `5` clean code |
 | `--instructions` | none | Your own instructions for the AI (`"use Java"`, `"comment every line"`), they win over savecodex's rules |
 
-Also takes the [document options](#document-options) below. Needs poppler (`pdftotext`, `pdftoppm`), plus `mysql`, graphviz (`dot`), matplotlib or Chrome for the answers that use them (with `--linux` the container has them). AI written code runs on your machine unless you pass `--linux`.
+Also takes the [document options](#document-options) below. Reads PDFs by itself, but needs `mysql`, graphviz (`dot`), matplotlib or Chrome for the answers that use them (with `--linux` the container has them). AI written code runs on your machine unless you pass `--linux`.
 
 MySQL answers run in databases of their own: each session starts in a fresh one, every database an answer creates, uses or drops gets a hidden prefix (removed again in the screenshots), and all of them are dropped when the session ends, so existing databases are never touched.
 
@@ -188,7 +187,7 @@ Python, C, C++, Java, JavaScript, Rust and shell scripts work out of the box; `s
 
 ## Installation
 
-Other builds on [Releases](https://github.com/kartinul/savecodex/releases/latest): `savecodex-macos-amd64`, `savecodex-linux-amd64`, `savecodex-windows-amd64.exe`.
+Other builds on [Releases](https://github.com/kartinul/savecodex/releases/latest): `savecodex-linux-amd64`, `savecodex-windows-amd64.exe`.
 
 Or build it yourself (needs Rust and [bun](https://bun.sh)) with `make build`, or use Docker (`Dockerfile` / `render.yaml`).
 Your code runs with the compilers on your machine, so have the ones you need (`python3`, `gcc`, `java`, ...).

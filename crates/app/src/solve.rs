@@ -2,7 +2,6 @@ use anyhow::{bail, Context, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -1472,29 +1471,22 @@ fn mime(ext: &str) -> &'static str {
     }
 }
 
-fn tool(cmd: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new(cmd).args(args).output()
-        .with_context(|| format!("{cmd} not found (install poppler)"))?;
-    if !out.status.success() {
-        bail!("{cmd} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 fn read_pdf(path: &Path, max_pages: usize) -> Result<(String, Vec<(&'static str, Vec<u8>)>)> {
-    let file = path.to_str().context("non-UTF-8 path")?;
-    let info = tool("pdfinfo", &[file])?;
-    let pages: usize = info.lines().find_map(|l| l.strip_prefix("Pages:")).and_then(|p| p.trim().parse().ok()).unwrap_or(0);
-    if pages > max_pages {
-        bail!("{file} has {pages} pages (limit {max_pages}, raise with --max-pages)");
+    use hayro::{hayro_syntax::Pdf, vello_cpu::color::palette::css::WHITE, PixmapSettings, RenderCache};
+    let file = path.display();
+    let bytes = std::fs::read(path)?;
+    // pdf-extract panics on some odd files; the page images still show everything
+    let text = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes).unwrap_or_default()).unwrap_or_default();
+    let pdf = Pdf::new(bytes).map_err(|e| anyhow::anyhow!("{file} is not a readable PDF ({e:?})"))?;
+    let pages = pdf.pages();
+    if pages.len() > max_pages {
+        bail!("{file} has {} pages (limit {max_pages}, raise with --max-pages)", pages.len());
     }
-    let text = tool("pdftotext", &["-layout", file, "-"])?;
-    let pics = tempfile::tempdir()?;
-    let prefix = pics.path().join("page");
-    tool("pdftoppm", &["-r", "110", "-jpeg", file, prefix.to_str().context("non-UTF-8 temp path")?])?;
-    let mut pages: Vec<PathBuf> = std::fs::read_dir(pics.path())?.filter_map(|e| Some(e.ok()?.path())).collect();
-    pages.sort_by(|a, b| natord::compare(&a.to_string_lossy(), &b.to_string_lossy()));
-    let images = pages.iter().map(|p| Ok(("image/jpeg", std::fs::read(p)?))).collect::<Result<_>>()?;
+    let scale = 110.0 / 72.0;
+    let (cache, size) = (RenderCache::new(), PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE });
+    let images = pages.iter()
+        .map(|page| Ok(("image/png", hayro::render(page, &cache, &Default::default(), &Default::default(), &size).into_png()?)))
+        .collect::<Result<_>>()?;
     Ok((text, images))
 }
 

@@ -118,7 +118,7 @@ function reset() {
   location.reload();
 }
 
-export function SettingsView({ mode, s, set, themes, name, onEditTheme, apiKey, setApiKey, onBack }: { mode: Mode; s: Settings; set: Set; themes: string[]; name: string; onEditTheme: () => void; apiKey: string; setApiKey: (k: string) => void; onBack: () => void }) {
+export function SettingsView({ mode, s, set, themes, name, onEditTheme, apiKey, setApiKey, keyOpen, onBack }: { mode: Mode; s: Settings; set: Set; themes: string[]; name: string; onEditTheme: () => void; apiKey: string; setApiKey: (k: string) => void; keyOpen: boolean; onBack: () => void }) {
   return (
     <div className="cfg">
       <header className="cfg-head"><h1 className="title">settings</h1>
@@ -185,7 +185,7 @@ export function SettingsView({ mode, s, set, themes, name, onEditTheme, apiKey, 
           <Switch label="double-check answers" tip={TIP.check} checked={s.check} onChange={check => set({ check })} />
         </div>
       </>}
-      <details>
+      <details open={keyOpen} ref={el => { if (keyOpen) el?.scrollIntoView({ block: "nearest" }) }}>
         <summary>own api key</summary>
         <div className="rows">
           <Text stack masked label="key" tip={TIP.key} value={apiKey} ph="sk-..." onChange={setApiKey} />

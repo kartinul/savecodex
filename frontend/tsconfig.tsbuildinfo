@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/live.tsx","./src/settings.tsx","./src/theme.tsx","./src/ticker.tsx","./src/api.ts","./src/main.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/cli.tsx","./src/live.tsx","./src/settings.tsx","./src/theme.tsx","./src/ticker.tsx","./src/api.ts","./src/main.tsx"],"version":"5.9.3"}
