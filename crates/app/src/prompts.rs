@@ -148,7 +148,7 @@ Rules:
 - pages: the length the format asks for, else about 3 for a synopsis and 12 for a report; the words of all sections together fit that. toc: true only for a report of 10 or more pages.
 - look: only what the format document states (body font, size in points, line spacing like 1.5, margin in cm); 0 or "" otherwise.
 - runs: only for a code-based document with terminal programs: the program runs whose screenshots the sections show, at most 4, each with stdin that shows its main features. file is an uploaded code file exactly as listed. [] when nothing should run.
-- questions: 0 to 5 things you cannot tell from the files but must know to write it well (what a feature does, whether data exists, whether the user will upload app screenshots for a GUI, web or mobile app). Each has 2 to 4 short options and a default that is the safest guess. If a chart needs data that wasn't uploaded, ask whether to use realistic made-up numbers. No questions about formatting or anything already answered.
+- questions: 0 to 5 things you cannot tell from the files but must know to write it well (what a feature does, whether data exists, whether the user will upload app screenshots for a GUI, web or mobile app). Each has 2 to 4 short options and a default that is the safest guess. If a chart needs data that wasn't uploaded, ask whether to use realistic made-up numbers. Uploaded data is always used exactly as it is: never ask about scaling, extrapolating or adding to it. No questions about formatting or anything already answered.
 
 Default sections:
 {REPORT_DEFAULTS}
@@ -192,7 +192,7 @@ Return ONLY this JSON, no markdown, one entry per section above, in that order:
 
 Rules:
 - Write like a careful student: plain, simple English, short direct sentences, concrete details of this project. No filler, no marketing tone, no em dashes. Never use these words: {words}.
-- Only state what the files, the idea and the answers support. Never invent features, results or numbers; keep unknown details general. Chart numbers come from an uploaded csv column, or are made up only when the answers allow it.
+- Only state what the files, the idea and the answers support. Never invent features, results or numbers; keep unknown details general. Uploaded data is used exactly as it is: its real number of rows and counts, never scaled, extrapolated or added to. Charts of it name the csv and column so the counts are exact; numbers are made up only when nothing was uploaded and the answers allow it.
 - Give each section what its needs list asks for: a "diagram" need is a figure with a diagram, "shot" a figure with a run, "snippet" a figure with a few real lines (10-30) of an uploaded code file, "upload" a figure with an uploaded image, "table" a table, "chart" a figure with a chart. Every figure and table also gets a sentence of text that explains it.
 - Tables suit lists of commands, modules, requirements, test cases and team roles. Test case tables use the real run outputs.
 - Refer to a table or figure as "the table below" or "the figure above", never by a number.

@@ -5,8 +5,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use docx_rs::{
-    AbstractNumbering, AlignmentType, BreakType, Docx, Footer, IndentLevel, Level, LevelJc, LevelOverride, LevelText, NumberFormat, Numbering,
-    NumberingId, PageMargin, PageNum, Paragraph, Pic, Run, SpecialIndentType, Start, Table, TableCell, TableOfContents, TableRow, WidthType,
+    AbstractNumbering, AlignmentType, BreakType, Docx, Footer, IndentLevel, Level, LevelJc, LevelOverride, LevelText, LineSpacing, NumberFormat, Numbering,
+    NumberingId, PageMargin, PageNum, Paragraph, Pic, Run, Shading, ShdType, SpecialIndentType, Start, Table, TableCell, TableOfContents, TableRow, WidthType,
 };
 
 use crate::doc_theme::{cm, DocTheme, Look};
@@ -43,7 +43,7 @@ pub fn generate(out: &Path, draft: &Draft, theme: &DocTheme, logo: Option<&[u8]>
     if draft.toc {
         docx = docx.add_paragraph(page_break())
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("Contents").bold().size(32)))
-            .add_table_of_contents(TableOfContents::new().heading_styles_range(1, 2).auto())
+            .add_table_of_contents(TableOfContents::new().heading_styles_range(1, 2).auto().dirty())
             .add_paragraph(page_break());
     } else {
         docx = docx.add_paragraph(Paragraph::new());
@@ -95,6 +95,10 @@ pub fn generate(out: &Path, draft: &Draft, theme: &DocTheme, logo: Option<&[u8]>
     let mut xml = docx.build();
     xml.styles = kerned(&xml.styles, &theme);
     xml.settings = word_settings(&xml.settings);
+    if draft.toc {
+        // the contents' page numbers are only placeholders; Word fills them in on open
+        xml.settings = String::from_utf8_lossy(&xml.settings).replacen("</w:settings>", r#"<w:updateFields w:val="true" /></w:settings>"#, 1).into_bytes();
+    }
     xml.pack(file).context("Failed to pack DOCX")?;
     Ok(())
 }
@@ -122,18 +126,20 @@ fn cover(mut docx: Docx, draft: &Draft, logo: &[u8], width: u32) -> Docx {
         let name = format!("{} {}", s.honorific.trim(), s.name.trim()).trim().to_string();
         std::iter::once(name).chain(Some(s.designation.trim().to_string()).filter(|d| !d.is_empty()))
     });
+    let tight = |run: Run| Paragraph::new().line_spacing(LineSpacing::new().after(0)).add_run(run);
     let column = |head: &str, lines: Vec<String>| lines.into_iter()
-        .fold(TableCell::new().width(width as usize / 2, WidthType::Dxa).add_paragraph(Paragraph::new().add_run(Run::new().add_text(head).bold())),
-            |cell, line| cell.add_paragraph(Paragraph::new().add_run(Run::new().add_text(line))));
+        .fold(TableCell::new().width(width as usize / 2, WidthType::Dxa).add_paragraph(tight(Run::new().add_text(head).bold())),
+            |cell, line| cell.add_paragraph(tight(Run::new().add_text(line))));
     let row = TableRow::new(vec![column("Submitted by", by.collect()), column("Submitted to", to.collect())]);
     docx.add_table(Table::without_borders(vec![row]).set_grid(vec![width as usize / 2; 2]).width(width as usize, WidthType::Dxa))
 }
 
 fn table(header: &[String], rows: &[Vec<String>], width: u32, code_font: &str) -> Table {
     let cols = header.len().max(rows.iter().map(Vec::len).max().unwrap_or(0)).max(1);
-    let cell = |text: &str, bold: bool| {
-        let p = inline(Paragraph::new(), text, code_font);
-        TableCell::new().width(width as usize / cols, WidthType::Dxa).add_paragraph(if bold { p.bold() } else { p })
+    let cell = |text: &str, head: bool| {
+        let cell = TableCell::new().width(width as usize / cols, WidthType::Dxa);
+        if head { cell.shading(Shading::new().shd_type(ShdType::Clear).color("auto").fill("F2F2F2")).add_paragraph(Paragraph::new().add_run(Run::new().add_text(text).bold())) }
+        else { cell.add_paragraph(inline(Paragraph::new(), text, code_font)) }
     };
     let row = |cells: &[String], bold: bool| TableRow::new((0..cols).map(|i| cell(cells.get(i).map_or("", String::as_str), bold)).collect());
     let body = std::iter::once(header).filter(|h| !h.is_empty()).map(|h| row(h, true)).chain(rows.iter().map(|r| row(r, false)));
@@ -214,7 +220,7 @@ mod tests {
         generate(&out, &draft, &DocTheme::load("word").unwrap(), None, &|_| anyhow::bail!("no such upload")).unwrap();
         let mut xml = String::new();
         zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap().by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
-        for want in ["Unix Lab (24B15CS214)", "Kartik Sharma - 992501030333", "Ms. Pallavi Sharma", "1. Introduction", "1.1 Objectives", "Table 1: Commands", "Figure 1: Flow", "[Flow: no such upload]", "w:titlePg"] {
+        for want in ["Unix Lab (24B15CS214)", "Kartik Sharma - 992501030333", "Ms. Pallavi Sharma", "1. Introduction", "1.1 Objectives", "Table 1: Commands", "Figure 1: Flow", "[Flow: no such upload]", "w:titlePg", "w:dirty=\"true\""] {
             assert!(xml.contains(want), "missing {want}");
         }
         assert!(!xml.contains("1. 1. Introduction") && !xml.contains("**"));
