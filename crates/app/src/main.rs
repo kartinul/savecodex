@@ -16,6 +16,8 @@ pub mod sloppy;
 pub mod diagram;
 pub mod editor_gen;
 pub mod chart;
+pub mod report;
+pub mod report_docx;
 
 
 use anyhow::Result;

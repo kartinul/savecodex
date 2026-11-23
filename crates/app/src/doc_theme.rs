@@ -135,6 +135,13 @@ impl DocTheme {
         parsed.unwrap_or_default()
     }
 
+    /// This theme with `patch`'s fields over it, sanitized like any other theme.
+    pub fn patched(&self, patch: Value) -> DocTheme {
+        let mut theme = serde_json::to_value(self).expect("theme serializes");
+        merge(&mut theme, patch);
+        serde_json::from_value::<DocTheme>(theme).map(Self::sanitized).unwrap_or_else(|_| self.clone())
+    }
+
     /// Themes can come from the web, so every value is kept within what Word handles.
     fn sanitized(mut self) -> Self {
         let pick = |v: &mut String, ok: &[&str]| if !ok.contains(&v.as_str()) { *v = ok[0].into() };

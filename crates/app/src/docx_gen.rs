@@ -41,7 +41,7 @@ fn answer_paras(text: &str) -> Vec<Paragraph> {
     text.split("\n\n").map(str::trim).filter(|p| !p.is_empty()).map(text_para).collect()
 }
 
-fn fonts(font: &str) -> RunFonts {
+pub(crate) fn fonts(font: &str) -> RunFonts {
     RunFonts::new().ascii(font).hi_ansi(font).cs(font).east_asia(font)
 }
 
@@ -49,7 +49,7 @@ fn pt(v: f32) -> u32 {
     (v * 20.0).round() as u32
 }
 
-fn styled(id: &str, name: &str, look: &Look) -> Style {
+pub(crate) fn styled(id: &str, name: &str, look: &Look) -> Style {
     let mut spacing = LineSpacing::new();
     if look.before > 0.0 { spacing = spacing.before(pt(look.before)) }
     if let Some(after) = look.after { spacing = spacing.after(pt(after)) }
@@ -72,7 +72,7 @@ fn styled(id: &str, name: &str, look: &Look) -> Style {
 }
 
 /// Paragraph styles every theme fills in, so Word's navigation pane and style list work.
-fn with_styles(docx: Docx, theme: &DocTheme) -> Docx {
+pub(crate) fn with_styles(docx: Docx, theme: &DocTheme) -> Docx {
     let mut docx = docx
         .default_fonts(fonts(&theme.font))
         .default_size((theme.size * 2.0).round() as usize)
@@ -101,7 +101,7 @@ fn with_styles(docx: Docx, theme: &DocTheme) -> Docx {
 /// docx-rs can't write kerning, ligatures or contextual spacing, so they go in by hand where Word has
 /// them: kern from 1pt and standard ligatures on all text (365), kern from 14pt on the Title, and a
 /// Title that ignores its own spacing.
-fn kerned(styles: &[u8], theme: &DocTheme) -> Vec<u8> {
+pub(crate) fn kerned(styles: &[u8], theme: &DocTheme) -> Vec<u8> {
     let mut xml = String::from_utf8_lossy(styles).into_owned();
     let insert = |xml: &mut String, from: &str, before: &str, text: &str| {
         if let Some(at) = xml.find(from).and_then(|s| xml[s..].find(before).map(|i| s + i)) { xml.insert_str(at, text) }
@@ -117,7 +117,7 @@ fn kerned(styles: &[u8], theme: &DocTheme) -> Vec<u8> {
 
 /// docx-rs adds East Asian compatibility options and an 840 tab stop; Word's new documents have
 /// neither (tabs every half inch), and the options change how Latin text and line breaks lay out.
-fn word_settings(settings: &[u8]) -> Vec<u8> {
+pub(crate) fn word_settings(settings: &[u8]) -> Vec<u8> {
     let mut xml = String::from_utf8_lossy(settings).replace(r#"<w:defaultTabStop w:val="840" />"#, r#"<w:defaultTabStop w:val="720" />"#);
     for flag in ["spaceForUL", "balanceSingleByteDoubleByteWidth", "doNotLeaveBackslashAlone", "ulTrailSpace", "doNotExpandShiftReturn", "useFELayout"] {
         xml = xml.replace(&format!("<w:{flag} />"), "");
