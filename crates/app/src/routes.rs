@@ -27,6 +27,9 @@ pub fn api_router() -> Router {
     Router::new()
         .route("/solve", post(|m: Multipart| start(Mode::Solve, m)))
         .route("/pack", post(|m: Multipart| start(Mode::Pack, m)))
+        .route("/report", post(report_start))
+        .route("/report/:id/upload", post(report_upload))
+        .route("/report/:id/:step", post(report_step))
         .route("/jobs/:id", delete(clear))
         .route("/jobs/:id/events", get(events))
         .route("/jobs/:id/shot/:n", get(shot))
@@ -252,10 +255,110 @@ async fn pack_job(job: &Arc<Job>, input: &Path, files: Vec<PathBuf>, f: &Fields)
     }
 }
 
-/// GET /api/jobs/:id/events — every event so far, then new ones as they come (SSE). Resumes after Last-Event-ID.
-async fn events(UrlPath(id): UrlPath<String>, headers: HeaderMap) -> Response {
+/// A report step: plan (one SMART call), write, redo one section, or only build the docx.
+enum ReportStep { Plan, Write, Redo(usize, String), Build }
+
+/// POST /api/report — multipart uploads (a logo under `logo/`), the draft as JSON and the settings;
+/// `step` is plan (default) or build, which only rebuilds the docx of a draft from an expired job.
+async fn report_start(multipart: Multipart) -> Response {
+    let (id, job) = match Job::create() {
+        Ok(j) => j,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    };
+    let input = job.dir.path().join("in");
+    if let Err(e) = std::fs::create_dir_all(&input) { Job::remove(&id); return bad(e) }
+    let (fields, _) = match read_form(multipart, &input).await {
+        Ok(form) => form,
+        Err(e) => { Job::remove(&id); return bad(e) }
+    };
+    if let Err(e) = crate::runner::isolate_job_dir(job.dir.path()) {
+        tracing::error!("Failed to isolate job dir: {e}");
+        Job::remove(&id);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "job isolation failure" }))).into_response();
+    }
+    let step = if field(&fields, "step") == Some("build") { ReportStep::Build } else { ReportStep::Plan };
+    match run_report(job, fields, step).await {
+        Ok(from) => Json(json!({ "id": id, "from": from })).into_response(),
+        Err(e) => { Job::remove(&id); bad(e) }
+    }
+}
+
+/// POST /api/report/:id/upload — more files for a report (screenshots it asked for, a new logo).
+async fn report_upload(UrlPath(id): UrlPath<String>, multipart: Multipart) -> Response {
     let Some(job) = Job::get(&id) else { return StatusCode::NOT_FOUND.into_response() };
-    let from = headers.get("last-event-id").and_then(|v| v.to_str().ok()?.parse::<usize>().ok()).map_or(0, |n| n + 1);
+    match read_form(multipart, &job.dir.path().join("in")).await {
+        Ok((_, files)) => Json(json!({ "files": files })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+/// POST /api/report/:id/write | redo | build — JSON with the draft and the settings (and for redo
+/// `section` and `note`); answers with where the step's events start.
+async fn report_step(UrlPath((id, step)): UrlPath<(String, String)>, Json(body): Json<serde_json::Map<String, serde_json::Value>>) -> Response {
+    let Some(job) = Job::get(&id) else { return StatusCode::NOT_FOUND.into_response() };
+    let fields: Fields = body.into_iter().map(|(k, v)| (k, match v { serde_json::Value::String(s) => s, other => other.to_string() })).collect();
+    let step = match step.as_str() {
+        "write" => ReportStep::Write,
+        "build" => ReportStep::Build,
+        "redo" => match field(&fields, "section").and_then(|n| n.parse().ok()) {
+            Some(n) => ReportStep::Redo(n, field(&fields, "note").unwrap_or_default().chars().take(2000).collect()),
+            None => return bad("which section to redo?"),
+        },
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    match run_report(job, fields, step).await {
+        Ok(from) => Json(json!({ "id": id, "from": from })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+/// Starts a report step in the job. Every change to the draft is sent as an event and rebuilds
+/// the docx, so the page shows the document filling in.
+async fn run_report(job: Arc<Job>, fields: Fields, step: ReportStep) -> Result<usize, String> {
+    let mut draft: crate::report::Draft = serde_json::from_str(field(&fields, "draft").unwrap_or("{}")).map_err(|e| format!("bad draft: {e}"))?;
+    let ai = user_ai(&fields).await?;
+    let instructions = field(&fields, "instructions").map(|t| t.chars().take(4000).collect());
+    let theme = field(&fields, "doc_theme").map_or_else(|| crate::doc_theme::DocTheme::load("word").unwrap_or_default(), crate::doc_theme::DocTheme::from_web);
+    let mut term = term_options(&fields);
+    if field(&fields, "style").is_none() { term.style = WindowStyle::Macos; term.padding = term.style.padding() }
+    let project = crate::report::Project::new(job.dir.path().join("in"), job.dir.path().join("work"), theme, term, 15).map_err(|e| e.to_string())?;
+    let from = job.restart();
+    let name = out_name(field(&fields, "output").unwrap_or("{}"), &draft.cover.title.chars().take(80).collect::<String>());
+    let out = job.dir.path().join(format!("{name}.docx"));
+    let run = {
+        let job = job.clone();
+        async move {
+            let ev = job.emitter("0");
+            let send = |d: &crate::report::Draft| {
+                ev.send(Event::Draft { draft: serde_json::to_value(d).unwrap_or_default() });
+                match tokio::task::block_in_place(|| crate::report::build(&project, d, &out)) {
+                    Ok(()) => ev.done(format!("{name}.docx"), out.clone()),
+                    Err(e) => ev.send(Event::Error { message: format!("building the docx: {e:#}") }),
+                }
+            };
+            let result = match step {
+                ReportStep::Plan => crate::report::plan(&project, &mut draft).await,
+                ReportStep::Write => crate::report::write(&project, &mut draft, &send).await,
+                ReportStep::Redo(n, note) => crate::report::redo(&project, &mut draft, n, &note).await,
+                ReportStep::Build => Ok(()),
+            };
+            if let Err(e) = result {
+                tracing::warn!("report step failed: {e:#}");
+                ev.send(Event::Error { message: format!("{e:#}") });
+            }
+            send(&draft);
+            job.finish();
+        }
+    };
+    job.set_task(tokio::spawn(crate::ai::scoped(crate::ai::RunAi { config: ai, instructions }, run)).abort_handle());
+    Ok(from)
+}
+
+/// GET /api/jobs/:id/events — every event so far (or from `?from=`), then new ones as they come (SSE). Resumes after Last-Event-ID.
+async fn events(UrlPath(id): UrlPath<String>, Query(q): Query<Fields>, headers: HeaderMap) -> Response {
+    let Some(job) = Job::get(&id) else { return StatusCode::NOT_FOUND.into_response() };
+    let from = headers.get("last-event-id").and_then(|v| v.to_str().ok()?.parse::<usize>().ok()).map(|n| n + 1)
+        .or_else(|| field(&q, "from").and_then(|n| n.parse().ok())).unwrap_or(0);
     let stream = stream::unfold((job, from), |(job, from)| async move {
         let batch = job.next(from).await?;
         let next = from + batch.len();

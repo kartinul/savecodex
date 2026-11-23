@@ -28,6 +28,8 @@ pub enum Event {
     Shot { id: String, n: usize },
     Done { file: usize, name: String },
     Error { message: String },
+    /// A report's whole draft after a change.
+    Draft { draft: serde_json::Value },
     Finished,
 }
 
@@ -86,6 +88,14 @@ impl Job {
 
     pub fn set_task(&self, task: tokio::task::AbortHandle) {
         *self.task.lock().unwrap() = Some(task);
+    }
+
+    /// Readies a finished job for another run (a report's next step), stopping one still going;
+    /// returns where the new run's events start.
+    pub fn restart(&self) -> usize {
+        if let Some(task) = self.task.lock().unwrap().take() { task.abort() }
+        *self.finished.lock().unwrap() = false;
+        self.events.lock().unwrap().len()
     }
 
     pub fn emitter(self: &Arc<Self>, doc: impl Into<String>) -> Emitter {
