@@ -1,4 +1,4 @@
-//! CLI — `pack`, `solve`, `run`, `term` and `serve`.
+//! CLI — `pack`, `solve`, `report`, `run`, `term` and `serve`.
 
 use std::path::PathBuf;
 
@@ -362,6 +362,78 @@ enum Commands {
         ai: AiArgs,
     },
 
+    /// Write a project report or synopsis: reads the format PDF the teacher gave, your code and data,
+    /// plans the sections, asks you a few questions, writes every section and builds the DOCX.
+    ///
+    /// SMART plans the outline and the questions in one call, MID writes the sections in parallel.
+    /// Programs the plan picks run on this machine for terminal screenshots. Diagrams need graphviz (dot).
+    Report {
+        /// The format/instruction PDF or DOCX, code files or folders, your own screenshots, CSV data.
+        inputs: Vec<PathBuf>,
+
+        /// The project title on the cover.
+        #[arg(long)]
+        title: String,
+
+        /// What the project is, in a few lines.
+        #[arg(long, default_value = "")]
+        idea: String,
+
+        /// Write a synopsis instead of a report.
+        #[arg(long)]
+        synopsis: bool,
+
+        /// A group member as "Name:Enrollment" or "Name:Enrollment:what they did"; repeat for each.
+        #[arg(long = "member")]
+        members: Vec<String>,
+
+        /// Who it's submitted to, as "Dr.:Name" or "Dr.:Name:Designation"; repeat for each.
+        #[arg(long = "supervisor")]
+        supervisors: Vec<String>,
+
+        /// Course name on the cover (default: read from the format PDF).
+        #[arg(long)]
+        course: Option<String>,
+
+        /// Course code on the cover (default: read from the format PDF).
+        #[arg(long)]
+        code: Option<String>,
+
+        /// Year and semester line on the cover (default: read from the format PDF).
+        #[arg(long)]
+        semester: Option<String>,
+
+        /// Institute logo for the cover (default: JIIT).
+        #[arg(long)]
+        logo: Option<PathBuf>,
+
+        /// Take every question's default answer instead of asking.
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Output file (default: the title).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// How the document looks: a doc theme preset or .json file. A format PDF's font, size,
+        /// spacing and margins go on top.
+        #[arg(long, default_value = "word", env = "SAVECODEX_REPORT_THEME")]
+        doc_theme: String,
+
+        /// Max sections written at once.
+        #[arg(short, long, default_value_t = 15, env = "SAVECODEX_JOBS")]
+        jobs: usize,
+
+        #[command(flatten)]
+        linux: LinuxArgs,
+
+        #[command(flatten)]
+        shot: ShotArgs,
+
+        #[command(flatten)]
+        ai: AiArgs,
+    },
+
     /// Compile and run a source code file using pseudo-terminal.
     Run {
         /// Source file to execute.
@@ -404,6 +476,28 @@ enum Commands {
         #[command(flatten)]
         shot: ShotArgs,
     },
+}
+
+/// Asks each plan question in the terminal; Enter (or `assume`) takes its default.
+fn answer_questions(draft: &mut crate::report::Draft, assume: bool) -> Result<()> {
+    if draft.questions.is_empty() { return Ok(()) }
+    println!("\nQuestions{}:", if assume { " (assuming the defaults)" } else { "" });
+    for q in &mut draft.questions {
+        println!("\n  {}", q.ask);
+        for (i, option) in q.options.iter().enumerate() { println!("    {}) {option}", i + 1) }
+        if assume { println!("    → {}", q.default); continue }
+        print!("    choose a number or type an answer [{}]: ", q.default);
+        std::io::Write::flush(&mut std::io::stdout())?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        let line = line.trim();
+        q.answer = match line.parse::<usize>() {
+            Ok(n) if (1..=q.options.len()).contains(&n) => q.options[n - 1].clone(),
+            _ if line.is_empty() => q.default.clone(),
+            _ => line.to_string(),
+        };
+    }
+    Ok(())
 }
 
 pub async fn run() -> Result<()> {
@@ -527,6 +621,60 @@ pub async fn run() -> Result<()> {
             if failed > 0 {
                 anyhow::bail!("{failed} of {} document(s) failed", results.len());
             }
+        }
+        Commands::Report { inputs, title, idea, synopsis, members, supervisors, course, code, semester, logo, yes, output, doc_theme, jobs, linux, shot, ai } => {
+            ai.apply();
+            let style_set = std::env::args().any(|a| a == "--style" || a.starts_with("--style=")) || std::env::var_os("SAVECODEX_STYLE").is_some();
+            let mut term = shot.options();
+            if !style_set {
+                term.style = crate::term_gen::WindowStyle::Macos;
+                term.padding = term.style.padding();
+            }
+            linux.apply(&mut term)?;
+            let split = |s: &str| -> Vec<String> { s.splitn(3, ':').map(|p| p.trim().to_string()).collect() };
+            let part = |v: &[String], i: usize| v.get(i).cloned().unwrap_or_default();
+            let mut draft = crate::report::Draft {
+                kind: if synopsis { crate::report::Kind::Synopsis } else { crate::report::Kind::Report },
+                idea,
+                cover: crate::report::Cover {
+                    title: title.clone(),
+                    course: course.unwrap_or_default(),
+                    code: code.unwrap_or_default(),
+                    semester: semester.unwrap_or_default(),
+                    members: members.iter().map(|m| split(m)).map(|v| crate::report::Member { name: part(&v, 0), enrollment: part(&v, 1), role: part(&v, 2) }).collect(),
+                    supervisors: supervisors.iter().map(|s| split(s)).map(|v| crate::report::Supervisor { honorific: part(&v, 0), name: part(&v, 1), designation: part(&v, 2) }).collect(),
+                },
+                ..Default::default()
+            };
+            let tmp = tempfile::tempdir()?;
+            let dir = tmp.path().join("in");
+            std::fs::create_dir_all(&dir)?;
+            crate::report::gather(&inputs, logo.as_deref(), &dir)?;
+            let _linux = crate::linux::Container::start(&dir).await?;
+            let project = crate::report::Project::new(dir, tmp.path().join("work"), crate::doc_theme::DocTheme::load(&doc_theme)?, term, jobs)?;
+
+            println!("🔍 Planning with {}…", crate::ai::describe(crate::ai::Tier::Smart));
+            crate::report::plan(&project, &mut draft).await?;
+            println!("\n{} {}, about {} pages{}:", if draft.code_based { "Code-based" } else { "Written" }, if synopsis { "synopsis" } else { "report" }, draft.pages, if draft.toc { ", with contents" } else { "" });
+            for (i, s) in draft.sections.iter().enumerate() {
+                let needs: Vec<&str> = s.needs.iter().map(String::as_str).filter(|n| *n != "text").collect();
+                println!("  {:>2}. {}{}", i + 1, s.title, if needs.is_empty() { String::new() } else { format!("  [{}]", needs.join(", ")) });
+            }
+            answer_questions(&mut draft, yes || !std::io::IsTerminal::is_terminal(&std::io::stdin()))?;
+
+            println!("\n✍️  Writing {} sections with {}…", draft.sections.len(), crate::ai::describe(crate::ai::Tier::Mid));
+            let shown = std::sync::Mutex::new(std::collections::HashSet::new());
+            let progress = move |d: &crate::report::Draft| {
+                for s in d.sections.iter().filter(|s| s.state == "done" || s.state == "failed") {
+                    if shown.lock().unwrap().insert(s.title.clone()) { println!("   {} {}", if s.state == "done" { "✓" } else { "✗" }, s.title) }
+                }
+            };
+            crate::report::write(&project, &mut draft, &progress).await?;
+            let out = output.map(|o| o.with_extension("docx"))
+                .unwrap_or_else(|| PathBuf::from(format!("{}.docx", title.chars().filter(|c| !"/\\:*?\"<>|".contains(*c)).collect::<String>().trim())));
+            crate::report::build(&project, &draft, &out)?;
+            let failed = draft.sections.iter().filter(|s| s.state != "done").count();
+            println!("\nDone{} → {}", if failed > 0 { format!(", {failed} section(s) failed") } else { String::new() }, out.display());
         }
         Commands::Run { file, input, output, linux } => {
             if linux.linux { crate::linux::enable()?; }

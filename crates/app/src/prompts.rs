@@ -117,3 +117,98 @@ pub fn fix_prompt(question: &str, before: &str, code: &str, error: &str) -> Stri
     };
     format!("{question}{before}This code fails:\n{code}\n\nError:\n{error}\n\nFix the cause of the error so the code still does what it did, in the same language, keeping every step that shows a result (tests, calls, queries, each case it demonstrates). Keep every name it uses (files, tables, databases, variables) and invent none. Return ONLY the fixed, complete code, no markdown.")
 }
+
+/// Words that make a report read as AI-written; `report` asks again when a section uses them.
+pub const AI_WORDS: &[&str] = &[
+    "delve", "seamless", "robust", "leverage", "utilize", "cutting-edge", "comprehensive", "furthermore", "moreover", "tapestry",
+    "realm", "pivotal", "streamline", "empower", "holistic", "synergy", "game-changer", "elevate", "harness", "foster", "meticulous",
+    "in today's", "plays a crucial role", "it is worth noting",
+];
+
+/// The sections a document gets when its format doesn't list any (from real JIIT synopses and reports).
+pub const REPORT_DEFAULTS: &str = r#"- synopsis: Introduction; Problem Statement and Objectives; <the course's concepts used in the project, named after the course: Data Structures Used, OOP Concepts Used, ER Diagram and Tables, Unix Commands Used, ...>; Design (one diagram that fits the course: class, ER or flowchart); Technologies Used; Applications and Real-Life Mapping; Expected Outcome; References.
+- code-based report: Abstract; Introduction and Objectives; Problem Statement; Methodology (with a flowchart); <the course's concepts or commands used> (a table); Functional Modules (a table); Software and Hardware Requirements; Demonstration and Results (terminal screenshots of the runs and a table of test cases); Expected Outcome; Future Scope; Team Roles (a table of who did what); References.
+- non-code report: Abstract; Introduction; Method; Results (charts of the data); Analysis; Recommendations; Conclusion; References."#;
+
+/// `report` step 1: read the format, the code and the idea; plan the outline and the questions.
+pub fn report_plan_prompt(kind: &str, project: &str, format: &str, photos: bool) -> String {
+    let photos = if photos { " A photo of each page of the format document is attached." } else { "" };
+    format!(r#"You plan a student's project {kind} for college submission. Below is everything known about the project, and the format document the teacher gave, if any.{photos}
+
+Return ONLY this JSON, no markdown:
+{{"course":"","code":"","semester":"","code_based":true,"pages":0,"toc":false,"look":{{"font":"","size":0,"line":0,"margin":0}},
+"sections":[{{"title":"","numbered":true,"brief":"","words":0,"needs":["text"]}}],
+"runs":[{{"id":"run1","file":"","stdin":"","args":[]}}],
+"questions":[{{"ask":"","options":[""],"default":""}}]}}
+
+Rules:
+- course, code, semester: the course name, course code (like 24B15CS214) and year/semester line (like "B.Tech II Year, Odd Semester 2026-27") as the format document gives them, else "".
+- code_based: true when code was uploaded or the course is a programming lab; false for surveys, essays and other projects without a program.
+- sections: when the format document lists the sections, use exactly those, in its order and with its names, leaving out a title item (the cover shows the title). Otherwise use the defaults below for this kind of document. A section's title has no number. numbered: false only for Abstract, References and Appendix. brief: one sentence on what this project's section must say, using real details from the files. words: the length to aim for. needs: what it shows besides text, any of "table", "diagram", "shot" (terminal screenshot of a run), "snippet" (a short piece of the real code), "chart" (from uploaded data or agreed numbers), "upload" (the user's own screenshots).
+- pages: the length the format asks for, else about 3 for a synopsis and 12 for a report; the words of all sections together fit that. toc: true only for a report of 10 or more pages.
+- look: only what the format document states (body font, size in points, line spacing like 1.5, margin in cm); 0 or "" otherwise.
+- runs: only for a code-based document with terminal programs: the program runs whose screenshots the sections show, at most 4, each with stdin that shows its main features. file is an uploaded code file exactly as listed. [] when nothing should run.
+- questions: 0 to 5 things you cannot tell from the files but must know to write it well (what a feature does, whether data exists, whether the user will upload app screenshots for a GUI, web or mobile app). Each has 2 to 4 short options and a default that is the safest guess. If a chart needs data that wasn't uploaded, ask whether to use realistic made-up numbers. No questions about formatting or anything already answered.
+
+Default sections:
+{REPORT_DEFAULTS}
+
+{project}
+
+Format document:
+{format}"#)
+}
+
+const REPORT_BLOCKS: &str = r#"Blocks, in reading order:
+{"type":"para","text":"<a paragraph>"}
+{"type":"heading","text":"<a sub-heading, no number>"}
+{"type":"bullets","items":["<point>"]}
+{"type":"numbered","items":["<step>"]}
+{"type":"table","caption":"<short caption>","header":["<column>"],"rows":[["<cell>"]]}
+{"type":"figure","caption":"<short caption>", plus exactly one of:
+  "diagram":{"kind":"flowchart|class|er|dfd|usecase","direction":"TB|LR","system":"<usecase only: system name>","nodes":[{"id":"a","title":"<2-4 words>","note":"<optional detail>","kind":"<see below>","fields":[],"methods":[]}],"edges":[{"from":"a","to":"b","label":"","kind":""}]}
+  "run":"<a run id>"
+  "snippet":{"file":"<uploaded code file>","from":<first line>,"to":<last line>}
+  "chart":{"kind":"bar|pie","csv":"<uploaded csv>","column":"<its column>"} or {"kind":"bar|pie","labels":[],"values":[]}
+  "upload":"<an uploaded image file name>"}
+Node kinds: flowchart: step, decision, start, end (the last step); class: class (fields like "-name: String", methods like "+speak(): void"); er: entity (fields, mark keys "(PK)"/"(FK)"), relation; dfd: process, external, store; usecase: actor, usecase. Edge kinds: class: inherits, has, uses; usecase: include, extend. Keep diagrams to 4-12 nodes."#;
+
+/// `report` step 4: write some sections of the outline as blocks.
+pub fn report_write_prompt(kind: &str, project: &str, outline: &str, sections: &str) -> String {
+    format!(r#"You write part of a student's project {kind} for college submission.
+
+{project}
+
+The whole outline (other sections are written separately; don't repeat what they cover):
+{outline}
+
+Write these sections:
+{sections}
+
+Return ONLY this JSON, no markdown, one entry per section above, in that order:
+{{"sections":[{{"title":"<section title>","blocks":[]}}]}}
+
+{REPORT_BLOCKS}
+
+Rules:
+- Write like a careful student: plain, simple English, short direct sentences, concrete details of this project. No filler, no marketing tone, no em dashes. Never use these words: {words}.
+- Only state what the files, the idea and the answers support. Never invent features, results or numbers; keep unknown details general. Chart numbers come from an uploaded csv column, or are made up only when the answers allow it.
+- Give each section what its needs list asks for: a "diagram" need is a figure with a diagram, "shot" a figure with a run, "snippet" a figure with a few real lines (10-30) of an uploaded code file, "upload" a figure with an uploaded image, "table" a table, "chart" a figure with a chart. Every figure and table also gets a sentence of text that explains it.
+- Tables suit lists of commands, modules, requirements, test cases and team roles. Test case tables use the real run outputs.
+- Refer to a table or figure as "the table below" or "the figure above", never by a number.
+- References: only official documentation and well-known textbooks the project really uses, like "Oracle, The Java Tutorials." or "W. Shotts, The Linux Command Line, 2nd ed., No Starch Press, 2019." No research papers, DOIs or made-up links.
+- Text may use **bold** and `code`, nothing else. Don't start a section with its own title or number."#, words = AI_WORDS.join(", "))
+}
+
+/// `report` step 4b: the abstract, from what the other sections say.
+pub fn report_abstract_prompt(kind: &str, project: &str, written: &str, words: usize) -> String {
+    format!(r#"Write the abstract of this student's project {kind}: about {words} words in one or two paragraphs, plain simple English, no em dashes, none of these words: {banned}. Say what was built or studied, how, and what it does or found, using only what the sections below say.
+
+{project}
+
+The sections:
+{written}
+
+Return ONLY this JSON, no markdown:
+{{"blocks":[{{"type":"para","text":"<paragraph>"}}]}}"#, banned = AI_WORDS.join(", "))
+}

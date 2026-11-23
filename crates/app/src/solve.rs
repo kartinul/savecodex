@@ -186,9 +186,9 @@ fn skip_bad<'de, D: serde::Deserializer<'de>, T: DeserializeOwned>(d: D) -> Resu
 
 /// Everything read from the input files.
 #[derive(Default)]
-struct Inputs {
-    text: String,
-    images: Vec<Part>,
+pub(crate) struct Inputs {
+    pub(crate) text: String,
+    pub(crate) images: Vec<Part>,
     data_files: Vec<PathBuf>,
 }
 
@@ -1358,7 +1358,7 @@ fn strip_fences(text: &str) -> &str {
 }
 
 /// Ask for JSON, asking again (up to `--retries` times) when the reply doesn't parse.
-async fn ask_json<T: DeserializeOwned>(tier: Tier, parts: &[Part]) -> Result<T> {
+pub(crate) async fn ask_json<T: DeserializeOwned>(tier: Tier, parts: &[Part]) -> Result<T> {
     let mut parts = parts.to_vec();
     for attempt in 0.. {
         let reply = ask(tier, &parts, true).await?;
@@ -1440,7 +1440,7 @@ fn close_brackets(json: &str) -> String {
     json.chars().chain(open.into_iter().rev()).collect()
 }
 
-fn read_inputs(paths: &[PathBuf], max_pages: usize) -> Result<Inputs> {
+pub(crate) fn read_inputs(paths: &[PathBuf], max_pages: usize) -> Result<Inputs> {
     let mut read = Inputs::default();
     for path in paths {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("input").to_string();
