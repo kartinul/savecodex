@@ -20,7 +20,7 @@ const DECIMAL: usize = 2;
 
 /// Writes `draft` to `out`. `picture` draws a figure; one it can't draw shows why in its place.
 pub fn generate(out: &Path, draft: &Draft, theme: &DocTheme, logo: Option<&[u8]>, picture: &dyn Fn(&Figure) -> Result<Vec<u8>>) -> Result<()> {
-    let theme = theme.patched(draft.look.clone());
+    let theme = theme.patched(stated(&draft.look));
     let (paper_w, paper_h) = if theme.paper == "letter" { (12240, 15840) } else { (11906, 16838) };
     let side = cm(theme.margin);
     let margin = PageMargin { top: cm(theme.margin_top), left: side, right: side, bottom: side, header: 708, footer: 708, gutter: 0 };
@@ -196,6 +196,12 @@ fn fitted(png: &[u8], max_w: u32) -> Result<Pic> {
     Ok(Pic::new(png).size((w * scale * 635.0) as u32, (h * scale * 635.0) as u32))
 }
 
+/// The look fields the format document stated; the model sends 0 or "" for the rest.
+fn stated(look: &serde_json::Value) -> serde_json::Value {
+    let given = |v: &serde_json::Value| !(v.is_null() || v.as_f64() == Some(0.0) || v.as_str().is_some_and(|s| s.trim().is_empty()));
+    look.as_object().map(|m| m.iter().filter(|(_, v)| given(v)).map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +230,12 @@ mod tests {
             assert!(xml.contains(want), "missing {want}");
         }
         assert!(!xml.contains("1. 1. Introduction") && !xml.contains("**"));
+    }
+
+    #[test]
+    fn unstated_look_keeps_theme() {
+        let look = stated(&serde_json::json!({"font": "", "size": 0, "line": 1.5, "margin": null}));
+        let theme = DocTheme::load("word").unwrap().patched(look);
+        assert_eq!((theme.size, theme.line, theme.font.is_empty()), (12.0, 1.5, false));
     }
 }
