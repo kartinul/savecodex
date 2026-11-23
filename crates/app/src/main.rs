@@ -13,6 +13,9 @@ pub mod doc_theme;
 pub mod solve;
 pub mod linux;
 pub mod sloppy;
+pub mod diagram;
+pub mod editor_gen;
+pub mod chart;
 
 
 use anyhow::Result;

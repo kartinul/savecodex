@@ -183,7 +183,7 @@ fn parse_ansi_line(line: &str, default_fg: Rgb) -> Vec<Run> {
     runs
 }
 
-fn text_width(font: &impl ab_glyph::Font, scale: PxScale, text: &str) -> i32 {
+pub(crate) fn text_width(font: &impl ab_glyph::Font, scale: PxScale, text: &str) -> i32 {
     let sf = font.as_scaled(scale);
     let mut w = 0.0f32;
     for c in text.chars() {
@@ -192,7 +192,7 @@ fn text_width(font: &impl ab_glyph::Font, scale: PxScale, text: &str) -> i32 {
     w.ceil() as i32
 }
 
-fn draw_text(img: &mut RgbaImage, color: Rgba<u8>, x: i32, y: i32, scale: PxScale, font: &impl Font, text: &str) {
+pub(crate) fn draw_text(img: &mut RgbaImage, color: Rgba<u8>, x: i32, y: i32, scale: PxScale, font: &impl Font, text: &str) {
     let scaled = font.as_scaled(scale);
     let mut caret = x as f32;
     let ascent = scaled.ascent();
