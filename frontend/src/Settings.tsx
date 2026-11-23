@@ -72,7 +72,7 @@ export function Seg<T extends string>({ value, options, onChange }: { value: T; 
   return <div className="seg">{options.map(([v, label]) => <button key={v} aria-pressed={v === value} onClick={() => onChange(v)}>{label}</button>)}</div>;
 }
 
-function Text({ label, tip, value, ph, name, onChange, stack, masked }: { label: string; tip: string; value: string; ph?: string; name?: string; onChange: (v: string) => void; stack?: boolean; masked?: boolean }) {
+export function Text({ label, tip, value, ph, name, onChange, stack, masked }: { label: string; tip: string; value: string; ph?: string; name?: string; onChange: (v: string) => void; stack?: boolean; masked?: boolean }) {
   const filled = useFilled(value, name);
   return (
     <label className={`row${stack ? " stack" : ""}`}>

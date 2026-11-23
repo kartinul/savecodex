@@ -258,3 +258,31 @@ img.shot.pop { animation: pop .4s cubic-bezier(.2, .9, .3, 1.2) }
 .modal-card img.shot { width: auto; max-height: 60vh }
 .modal-card .close { position: absolute; top: 16px; right: 16px }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: var(--r-sm); z-index: 60; animation: fade .2s; max-width: calc(100% - 32px) }
+
+/* report: member and supervisor rows, questions, the outline, section progress, the real docx */
+.trio { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 20px; gap: 8px; align-items: center }
+.row.stack .trio .ri { text-align: left }
+.trio .pick .ri { min-width: 0 }
+.opts { display: flex; flex-wrap: wrap; gap: 4px }
+.opts button { padding: 4px 8px; border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-sm); color: var(--muted); text-align: left }
+.opts button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent) }
+.outline { display: flex; flex-direction: column; gap: 2px; padding-left: 3ch; margin: 0 }
+.outline li { padding-left: 4px }
+.outline li > * { vertical-align: middle }
+.outline .ri { text-align: left; width: calc(100% - 9ch); flex: none }
+.outline .muted { display: block; font-size: var(--fs-s) }
+.outline .x { opacity: 1; width: 3ch }
+.outline .x:disabled { opacity: .3 }
+.secs { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px }
+.secs li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; animation: fade .25s }
+.secs .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.secs [data-state="writing"] .state { animation: breathe 1s steps(2, jump-none) infinite }
+.secs [data-state="failed"] .name { color: var(--muted) }
+.note-row { flex-basis: 100%; display: flex; gap: 8px }
+.note-row .ri { text-align: left; background: var(--bg); border-radius: var(--r-sm); padding: 4px 8px }
+textarea.edit { text-align: left; background: var(--bg); border-radius: var(--r-sm); padding: 8px; color: var(--fg); font-size: var(--fs-s) }
+.docx-view { min-width: 0; font-family: Aptos, Calibri, Carlito, Arial, sans-serif }
+.docx-view .docx-wrapper { background: none !important; padding: 0 !important; align-items: flex-start !important }
+.docx-view section.docx { box-shadow: 0 1px 3px rgb(31 52 69 / .25); margin-bottom: 20px !important }
+a.btn { text-decoration: none; color: inherit }
+a.btn.primary { color: var(--on-accent) }

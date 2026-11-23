@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { DEFAULTS, clearJob, docUrl, fetchThemes, followJob, previewUrl, startJob, type DocTheme, type JobEvent, type Mode, type Settings, type Upload } from "./api";
 import { Cli } from "./Cli";
 import { DocPreview, Groups, Idle, type Doc } from "./Live";
+import { ReportMain, ReportSide, useReport } from "./Report";
 import { SettingsView, Toml } from "./Settings";
 import { ThemeView } from "./Theme";
 
 type Phase = "idle" | "running" | "done";
+type Tab = Mode | "report";
 
 function useStored<T>(key: string, initial: T): [T, (v: T) => void] {
   const [value, setValue] = useState<T>(() => {
@@ -59,7 +61,7 @@ function reduce(docs: Doc[], e: JobEvent, mode: Mode, job: string): Doc[] {
 
 export default function App() {
   const [settings, setSettings] = useStored<Settings>("savecodex.settings", DEFAULTS);
-  const [view, setView] = useStored("savecodex.view", { mode: "solve" as Mode, side: 380, closed: false });
+  const [view, setView] = useStored("savecodex.view", { mode: "solve" as Tab, side: 380, closed: false });
   const [apiKey, setApiKey] = useState("");
   const [uploads, setUploads] = useState<Record<Mode, Upload[]>>({ solve: [], pack: [] });
   const [phase, setPhase] = useState<Phase>("idle");
@@ -83,13 +85,14 @@ export default function App() {
     addEventListener("pagehide", leave);
     return () => removeEventListener("pagehide", leave);
   }, [phase]);
-  const mode = view.mode, files = uploads[mode];
+  const tab = view.mode, mode: Mode = tab === "report" ? "solve" : tab, files = uploads[mode];
   const set = (patch: Partial<Settings>) => setSettings({ ...settings, ...patch });
   const name = files[0] ? stem(files[0].path.split("/")[0]) : mode === "solve" ? "document" : "code";
   const preview = useDebounced(previewUrl({ ...settings, cwd: settings.cwd.split("{}").join(name) }), 200);
   const themes = [...presets, ...Object.values(custom)];
   const theme = themes.find(t => t.name === settings.doc_theme) ?? presets[0];
   const names = themes.map(t => t.name);
+  const report = useReport(themes, { api_key: apiKey, base_url: settings.base_url, model: settings.model });
 
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(""), 3000); return () => clearTimeout(t) } }, [toast]);
 
@@ -194,7 +197,7 @@ export default function App() {
     <div className={`app${view.closed ? " closed" : ""}${dragging ? " dragging" : ""}`} style={{ "--side": `${view.side}px` } as React.CSSProperties}>
       <main className="main">
         <button className="title brand" onClick={home}>savecodex</button>
-        {cli ? <Cli onBack={() => setCli(false)} /> : phase === "idle"
+        {cli ? <Cli onBack={() => setCli(false)} /> : tab === "report" ? <ReportMain r={report} /> : phase === "idle"
           ? cfg && theme ? <DocPreview mode={mode} s={settings} t={theme} name={name} preview={preview} /> : <Idle mode={mode} preview={preview} />
           : <Groups docs={docs} mode={mode} onDownload={d => download([d])} onRedo={docs.length > 1 ? redo : undefined} />}
       </main>
@@ -203,12 +206,12 @@ export default function App() {
         <div className="grip" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabIndex={0} onPointerDown={grip} onKeyDown={nudge} />
         <div className="side-head">
           <div className="seg" role="group" aria-label="Mode">
-            {(["solve", "pack"] as Mode[]).map(m => <button key={m} aria-pressed={mode === m} disabled={phase !== "idle"} onClick={() => setView({ ...view, mode: m })}>{m}</button>)}
+            {(["solve", "pack", "report"] as Tab[]).map(m => <button key={m} aria-pressed={tab === m} disabled={phase !== "idle" || (tab === "report" && !!report.busy)} onClick={() => setView({ ...view, mode: m })}>{m}</button>)}
           </div>
           <button className="fold" aria-label={view.closed ? "Show panel" : "Hide panel"} onClick={() => setView({ ...view, closed: !view.closed })}>{view.closed ? "«" : "»"}</button>
         </div>
 
-        {cfg && phase !== "running" ? editing && theme ? (
+        {tab === "report" ? <ReportSide r={report} /> : cfg && phase !== "running" ? editing && theme ? (
           <ThemeView theme={theme} names={names} custom={custom} setCustom={setCustom} select={doc_theme => set({ doc_theme })} onBack={() => setEditing(false)} />
         ) : (
           <SettingsView mode={mode} s={settings} set={set} themes={names} name={name} onEditTheme={() => setEditing(true)} apiKey={apiKey} setApiKey={setApiKey} keyOpen={keyOpen} onBack={() => setCfg(false)} />

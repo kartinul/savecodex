@@ -74,6 +74,7 @@ export type JobEvent = { doc: string } & (
   | { t: "shot"; id: string; n: number }
   | { t: "done"; file: number; name: string }
   | { t: "error"; message: string }
+  | { t: "draft"; draft: Draft }
   | { t: "finished" }
 );
 export type State = "waiting" | "writing" | "running" | "fixing" | "ok" | "failed";
@@ -104,6 +105,65 @@ export async function startJob(mode: Mode, uploads: Upload[], s: Settings, theme
 
 export function followJob(job: string, onEvent: (e: JobEvent) => void): () => void {
   const source = new EventSource(`/api/jobs/${job}/events`);
+  source.onmessage = m => {
+    const e = JSON.parse(m.data) as JobEvent;
+    onEvent(e);
+    if (e.t === "finished") source.close();
+  };
+  return () => source.close();
+}
+
+export type Member = { name: string; enrollment: string; role: string };
+export type Supervisor = { honorific: string; name: string; designation: string };
+export type Block =
+  | { type: "para" | "heading"; text: string }
+  | { type: "bullets" | "numbered"; items: string[] }
+  | { type: "table"; caption: string; header: string[]; rows: string[][] }
+  | { type: "figure"; caption: string; [source: string]: unknown };
+export type Section = { title: string; numbered: boolean; brief: string; words: number; needs: string[]; state: string; blocks: Block[] };
+export type Question = { ask: string; options: string[]; default: string; answer: string };
+export type Draft = {
+  kind: "report" | "synopsis"; idea: string; code_based: boolean; pages: number; toc: boolean;
+  cover: { title: string; course: string; code: string; semester: string; members: Member[]; supervisors: Supervisor[] };
+  look: unknown; questions: Question[]; runs: unknown[]; sections: Section[];
+};
+export const EMPTY_DRAFT: Draft = {
+  kind: "report", idea: "", code_based: false, pages: 0, toc: false, look: null, questions: [], runs: [], sections: [],
+  cover: { title: "", course: "", code: "", semester: "", members: [{ name: "", enrollment: "", role: "" }], supervisors: [{ honorific: "Dr.", name: "", designation: "" }] },
+};
+
+/** Who's asking and how: the user's own key and model, and the doc theme (JSON or a preset name). */
+export type ReportFields = { doc_theme: string; api_key: string; base_url: string; model: string };
+type Started = { id: string; from: number };
+
+async function answer(res: Response): Promise<Started> {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || `the server answered ${res.status}`), { status: res.status });
+  return data;
+}
+
+/** Uploads the files (the logo as logo/…) and starts planning, or with `step: "build"` only rebuilds the docx. */
+export function reportStart(uploads: Upload[], logo: File | null, draft: Draft, f: ReportFields, step: "plan" | "build" = "plan"): Promise<Started> {
+  const body = new FormData();
+  for (const [k, v] of Object.entries({ ...f, draft: JSON.stringify(draft), step })) body.append(k, v);
+  for (const u of uploads) body.append(u.path, u.file, u.file.name);
+  if (logo) body.append(`logo/${logo.name}`, logo, logo.name);
+  return fetch("/api/report", { method: "POST", body }).then(answer);
+}
+
+export const reportStep = (job: string, step: "write" | "redo" | "build", draft: Draft, f: ReportFields, extra: Record<string, string> = {}) =>
+  fetch(`/api/report/${job}/${step}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...f, ...extra, draft: JSON.stringify(draft) }) }).then(answer);
+
+export async function reportUpload(job: string, uploads: Upload[]) {
+  const body = new FormData();
+  for (const u of uploads) body.append(u.path, u.file, u.file.name);
+  const res = await fetch(`/api/report/${job}/upload`, { method: "POST", body });
+  if (!res.ok) throw Object.assign(new Error(`the server answered ${res.status}`), { status: res.status });
+}
+
+/** Follows one step of a report job from where it started; stop with the returned function. */
+export function followStep(job: string, from: number, onEvent: (e: JobEvent) => void): () => void {
+  const source = new EventSource(`/api/jobs/${job}/events?from=${from}`);
   source.onmessage = m => {
     const e = JSON.parse(m.data) as JobEvent;
     onEvent(e);
